@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.parse import urlsplit
+
 from .defaults import build_default_settings
 
 def coerce_bool(value, default: bool = False) -> bool:
@@ -54,16 +56,28 @@ def _coerce_hex(value: object, default: str) -> str:
     return text
 
 
+def _sanitize_update_feed_url(value: object, default: str) -> str:
+    raw = str(value or "").strip() or default
+    try:
+        parts = urlsplit(raw)
+    except Exception:
+        return default
+    if not parts.scheme or not parts.netloc:
+        return default
+    return raw
+
+
 def migrate_settings(settings: dict) -> dict:
     current = dict(settings)
+    defaults = build_default_settings(default_style="Windows", font_family="Segoe UI", font_size=11)
     schema = _coerce_int_clamped(current.get("settings_schema_version", 1), 1, 1, 999)
     if schema >= 2:
         current["save_debug_logs_to_appdata"] = coerce_bool(current.get("save_debug_logs_to_appdata", False), False)
         current["backup_output_dir"] = str(current.get("backup_output_dir", "") or "").strip()
+        current["update_feed_url"] = _sanitize_update_feed_url(current.get("update_feed_url"), defaults.get("update_feed_url", ""))
         normalize_ui_visibility_settings(current)
         return current
 
-    defaults = build_default_settings(default_style="Windows", font_family="Segoe UI", font_size=11)
     for key, value in defaults.items():
         current.setdefault(key, value)
 
@@ -133,6 +147,7 @@ def migrate_settings(settings: dict) -> dict:
     current["ai_send_redact_paths"] = coerce_bool(current.get("ai_send_redact_paths", False), False)
     current["ai_send_redact_tokens"] = coerce_bool(current.get("ai_send_redact_tokens", True), True)
     current["ai_key_storage_mode"] = _coerce_enum(current.get("ai_key_storage_mode"), {"settings", "env_only"}, "settings")
+    current["update_feed_url"] = _sanitize_update_feed_url(current.get("update_feed_url"), defaults.get("update_feed_url", ""))
 
     current["recovery_mode"] = _coerce_enum(
         current.get("recovery_mode"),

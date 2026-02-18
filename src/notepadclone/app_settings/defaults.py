@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-DEFAULT_UPDATE_FEED_URL = "https://raw.githubusercontent.com/ne0gl1tch20/neogl1tch20server/refs/heads/main/updates/notepad.xml"
+DEFAULT_UPDATE_FEED_URL = "https://raw.githubusercontent.com/ne0gl1tch20/notepadclone/refs/heads/main/notepad.xml?token=GHSAT0AAAAAADU5CWUQNDBHQZOM7VKLYBCW2MVWQTQ"
 
 
 def build_default_settings(*, default_style: str, font_family: str, font_size: int) -> dict:

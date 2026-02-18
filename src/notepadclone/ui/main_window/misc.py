@@ -4001,6 +4001,10 @@ class SettingsDialog(QDialog):
         self.ai_model_edit.setText(self._settings.get("ai_model", "gemini-3-flash-preview"))
         self.update_feed_url_edit = QLineEdit(ai_group)
         self.update_feed_url_edit.setPlaceholderText(DEFAULT_UPDATE_FEED_URL)
+        self.update_feed_url_edit.setReadOnly(True)
+        self.update_feed_url_edit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+        self.update_feed_url_edit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.update_feed_url_edit.setToolTip("Update feed URL is managed by the app and is read-only.")
         self.update_feed_url_edit.setText(
             self._settings.get("update_feed_url", DEFAULT_UPDATE_FEED_URL)
         )
