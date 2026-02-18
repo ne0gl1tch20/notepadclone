@@ -68,8 +68,7 @@ The format is based on Keep a Changelog, and this project uses Semantic Versioni
 - Reassigned Pin Tab shortcut from `Ctrl+Shift+P` to `Ctrl+Alt+P` to avoid conflict with Command Palette.
 - Toolbar overflow (`>>`) behavior reworked:
   - converted to right-edge overlay button instead of regular toolbar action
-  - dynamic hidden-tools menu now uses proxy actions for reliable text entries
-  - update scheduling debounced to reduce resize/menu redraw churn.
+  - dynamic hidden-tools menu now uses proxy actions for reliable text entries.
 
 ### Fixed
 - Prevented startup/runtime crashes from stale/deleted Qt action wrappers (`QWidgetAction` / `QAction`) by adding defensive `RuntimeError` guards in shortcut and tooltip/action wiring paths.
@@ -77,6 +76,18 @@ The format is based on Keep a Changelog, and this project uses Semantic Versioni
 - Fixed off-screen placement of overlay `>>` button by anchoring to toolbar `contentsRect()`.
 - Fixed mojibake/garbled labels in Preferences navigation and buttons (emoji/category text).
 - Fixed `build_installer.bat` parse error (`was was unexpected at this time`) caused by unescaped parentheses in a block `echo`.
+
+## [1.6.9-prerelease] - 2026-02-18
+
+### Changed
+- Updated `notepad.xml` release feed metadata for `1.6.9-prerelease`.
+- Refined updater UI flow with non-blocking update-available dialog behavior.
+- Expanded updater debug logs with worker/thread lifecycle and feed parsing details.
+
+### Fixed
+- Fixed updater cross-thread UI interactions that could cause unresponsive behavior.
+- Fixed overlapping/manual-vs-auto update check handling during startup checks.
+- Fixed update check timeout behavior with watchdog cancellation for stalled network calls.
 
 ## [1.6.8-prerelease] - 2026-02-18
 
