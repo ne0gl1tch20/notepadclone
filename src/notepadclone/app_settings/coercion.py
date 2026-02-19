@@ -58,6 +58,8 @@ def _coerce_hex(value: object, default: str) -> str:
 
 def _sanitize_update_feed_url(value: object, default: str) -> str:
     raw = str(value or "").strip() or default
+    if "neogl1tch20server" in raw or raw.endswith("/updates/notepad.xml"):
+        raw = default
     try:
         parts = urlsplit(raw)
     except Exception:
