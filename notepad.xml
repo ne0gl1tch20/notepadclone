@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <updates>
   <item>
-    <title>Notepad Clone 1.6.10-prerelease</title>
-    <version>1.6.10</version>
+    <title>Notepad Clone 1.6.11-prerelease</title>
+    <version>1.6.12</version>
     <pubDate>2026-02-19</pubDate>
     <description>
       - Startup args can open folders as workspace roots

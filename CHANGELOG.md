@@ -6,6 +6,11 @@ The format is based on Keep a Changelog, and this project uses Semantic Versioni
 
 ## [Unreleased]
 
+## [1.6.11-prerelease] - 2026-02-19
+
+### Changes
+- No API key message navigation 
+
 ## [1.6.10-prerelease] - 2026-02-19
 
 ### Added

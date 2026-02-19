@@ -4,6 +4,7 @@ import ctypes
 import os
 import socket
 import sys
+import tempfile
 import time
 import webbrowser
 from pathlib import Path
@@ -11,7 +12,7 @@ from urllib.error import URLError
 from urllib.request import urlopen
 
 from PySide6.QtCore import QObject, QThread, Signal, Qt, QTimer
-from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QProgressDialog
+from PySide6.QtWidgets import QApplication, QMessageBox, QProgressDialog
 
 from ..app_settings.defaults import DEFAULT_UPDATE_FEED_URL
 from .updater_helpers import UpdateInfo, is_newer_version, parse_update_feed
@@ -136,6 +137,11 @@ class UpdaterController(QObject):
         self._download_workers: dict[_UpdateDownloadWorker, QThread] = {}
         self._active_check_thread: QThread | None = None
         self._update_available_box: QMessageBox | None = None
+        self._pending_download_version: str = ""
+        self._cleanup_pending_update_capsule()
+        pending_state = self._pending_capsule_state_text()
+        self._log_update(f"Pending update capsule state: {pending_state}")
+        print(f"[Updater] Pending update capsule state: {pending_state}")
 
     def _log_update(self, message: str) -> None:
         if hasattr(self.window, "log_event"):
@@ -408,17 +414,8 @@ class UpdaterController(QObject):
             QMessageBox.information(self.window, "Download Update", "No downloadable update found.")
             return
 
-        filename = Path(update.download_url.split("?")[0]).name or "notepad-update.bin"
-        destination, _ = QFileDialog.getSaveFileName(
-            self.window,
-            "Download Update",
-            filename,
-            "All Files (*.*)",
-        )
-        if not destination:
-            self._log_update("User canceled download destination selection.")
-            return
-
+        destination = self._build_capsule_destination(update.download_url)
+        self._pending_download_version = str(update.version or "").strip()
         worker = _UpdateDownloadWorker(update.download_url, destination)
         self._log_update(f"Starting update download: {update.download_url} -> {destination}")
         thread = QThread(self.window)
@@ -440,17 +437,22 @@ class UpdaterController(QObject):
 
     def _on_download_finished(self, _thread: QThread, path: str) -> None:
         self._log_update(f"Update download finished: {path}")
+        self._persist_pending_update_capsule(path, self._pending_download_version)
         self.window.show_status_message(f"Update downloaded: {path}", 4000)
         box = QMessageBox(self.window)
         box.setWindowTitle("Update Downloaded")
         box.setIcon(QMessageBox.Information)
-        box.setText(f"Downloaded update to:\n{path}")
+        box.setText("Update installer is ready.")
+        box.setInformativeText("A temporary update capsule has been downloaded and is ready to run.")
+        box.setDetailedText(path)
         open_btn = box.addButton("Open Installer", QMessageBox.AcceptRole)
         box.addButton("Close", QMessageBox.RejectRole)
         box.exec()
         if box.clickedButton() == open_btn:
             self._log_update("User chose 'Open Installer'.")
-            self._open_path(path)
+            if self._open_path(path):
+                self._log_update("Installer started successfully; closing app to avoid phantom task.")
+                QApplication.instance().quit()
         else:
             self._log_update("User closed update-downloaded dialog without opening installer.")
 
@@ -484,7 +486,7 @@ class UpdaterController(QObject):
             return
         self._on_download_failed(thread, message)
 
-    def _open_path(self, path: str) -> None:
+    def _open_path(self, path: str) -> bool:
         try:
             if os.name == "nt":
                 self._log_update(f"Opening installer as administrator via ShellExecuteW runas: {path}")
@@ -501,6 +503,7 @@ class UpdaterController(QObject):
             else:
                 self._log_update(f"Opening installer via webbrowser: {path}")
                 webbrowser.open(f"file://{Path(path).resolve()}")
+            return True
         except Exception as exc:  # noqa: BLE001
             self._log_update(f"Failed to open installer: {exc}")
             self._show_error_with_details(
@@ -508,6 +511,58 @@ class UpdaterController(QObject):
                 summary="Could not open installer.",
                 details=str(exc),
             )
+            return False
+
+    def _build_capsule_destination(self, download_url: str) -> str:
+        filename = Path(download_url.split("?")[0]).name or "notepad-update.bin"
+        capsule_dir = Path(tempfile.gettempdir()) / "notepadclone"
+        capsule_dir.mkdir(parents=True, exist_ok=True)
+        base = f"update-capsule-{int(time.time())}-{filename}"
+        return str(capsule_dir / base)
+
+    def _persist_pending_update_capsule(self, path: str, version: str) -> None:
+        self.window.settings["pending_update_installer_path"] = path
+        self.window.settings["pending_update_version"] = version
+        save_settings = getattr(self.window, "save_settings_to_disk", None)
+        if callable(save_settings):
+            try:
+                save_settings()
+            except Exception as exc:  # noqa: BLE001
+                self._log_update(f"Failed to persist pending update capsule metadata: {exc}")
+
+    def _clear_pending_update_capsule(self) -> None:
+        self.window.settings.pop("pending_update_installer_path", None)
+        self.window.settings.pop("pending_update_version", None)
+        save_settings = getattr(self.window, "save_settings_to_disk", None)
+        if callable(save_settings):
+            try:
+                save_settings()
+            except Exception as exc:  # noqa: BLE001
+                self._log_update(f"Failed to clear pending update capsule metadata: {exc}")
+
+    def _cleanup_pending_update_capsule(self) -> None:
+        path_raw = str(self.window.settings.get("pending_update_installer_path", "") or "").strip()
+        version_raw = str(self.window.settings.get("pending_update_version", "") or "").strip()
+        if not path_raw:
+            return
+        capsule_path = Path(path_raw)
+        can_delete = bool(version_raw) and not is_newer_version(version_raw, APP_VERSION)
+        if can_delete and capsule_path.exists():
+            try:
+                capsule_path.unlink()
+                self._log_update(f"Deleted stale update capsule after restart: {capsule_path}")
+            except Exception as exc:  # noqa: BLE001
+                self._log_update(f"Failed to delete stale update capsule: {exc}")
+                return
+        if can_delete or not capsule_path.exists():
+            self._clear_pending_update_capsule()
+
+    def _pending_capsule_state_text(self) -> str:
+        path_raw = str(self.window.settings.get("pending_update_installer_path", "") or "").strip()
+        version_raw = str(self.window.settings.get("pending_update_version", "") or "").strip()
+        if not path_raw:
+            return "none"
+        return f"version={version_raw or 'unknown'} path={path_raw}"
 
     def _cleanup_thread(self, thread: QThread) -> None:
         self._workers.pop(thread, None)

@@ -261,7 +261,7 @@ class UiSetupMixin:
     @staticmethod
     def _default_style_name() -> str:
         available = {name.lower(): name for name in QStyleFactory.keys()}
-        for candidate in ("windows 11", "windows11", "windowsvista", "windows"):
+        for candidate in ("windows", "windowsvista", "windows 11", "windows11"):
             if candidate in available:
                 return available[candidate]
         if "fusion" in available:

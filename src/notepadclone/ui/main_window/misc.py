@@ -3460,6 +3460,12 @@ class MiscMixin:
                 version = version_path.read_text(encoding="utf-8").strip()
             except OSError:
                 version = "v?.?.?"  # fallback if missing
+        capsule_path = str(self.settings.get("pending_update_installer_path", "") or "").strip()
+        capsule_version = str(self.settings.get("pending_update_version", "") or "").strip()
+        if capsule_path:
+            capsule_text = f"{html_escape(capsule_version or 'unknown')} @ {html_escape(capsule_path)}"
+        else:
+            capsule_text = "none"
 
         about_box = QMessageBox(self)
         about_box.setWindowTitle("About Notepad Clone")
@@ -3474,6 +3480,7 @@ class MiscMixin:
     <a href="easteregg"><b>Notepad Clone</b></a><br>
     Simple Notepad clone implemented with PySide6<br>
     Version: <b>{version}</b><br><br>
+    Pending update capsule: <b>{capsule_text}</b><br><br>
 
     &copy; 2026 Notepad Clone Project<br>
     Inspired by Windows 10 Notepad<br><br>

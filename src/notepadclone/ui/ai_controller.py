@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 from .ai_edit_preview_dialog import AIEditPreviewDialog
 
 MISSING_API_KEY_MESSAGE = (
-    "I don't have an API key! Do it in File > Settings > AI and Updates > Gemini API Key! "
+    "I don't have an API key! Do it in Settings > Preferences > AI and Updates > Gemini API Key! "
     "To add your own API Key, visit https://aistudio.google.com/app/api-keys"
 )
 
