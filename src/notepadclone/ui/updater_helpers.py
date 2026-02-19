@@ -130,6 +130,8 @@ def _extract_download_url(node: ET.Element) -> str | None:
     return None
 
 
+
+
 def _version_tuple(version: str) -> tuple[int, ...]:
     parts = [int(piece) for piece in re.findall(r"\d+", version)]
     return tuple(parts) if parts else (0,)

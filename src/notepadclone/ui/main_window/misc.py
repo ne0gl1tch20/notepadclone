@@ -3452,12 +3452,14 @@ class MiscMixin:
         self.log_event("Info", "Opened About dialog")
 
         # --- Read version from file ---
-        app_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[3]))
-        version_file = app_root / "assets" / "version.txt"
-        try:
-            version = version_file.read_text(encoding="utf-8").strip()
-        except FileNotFoundError:
+        version_path = resolve_asset_path("version.txt")
+        if version_path is None:
             version = "v?.?.?"  # fallback if missing
+        else:
+            try:
+                version = version_path.read_text(encoding="utf-8").strip()
+            except OSError:
+                version = "v?.?.?"  # fallback if missing
 
         about_box = QMessageBox(self)
         about_box.setWindowTitle("About Notepad Clone")
