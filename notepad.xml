@@ -10,7 +10,7 @@
       - Fixed workspace dialog acceptance crash
     </description>
     <enclosure
-      url="https://github.com/ne0gl1tch20/notepadclone/raw/refs/heads/main/dist/installer/NotepadClone-Setup-1.6.10-prerelease.exe"
+      url="https://github.com/ne0gl1tch20/notepadclone/raw/refs/heads/main/dist/installer/NotepadClone-Setup-1.6.11-prerelease.exe"
       type="application/octet-stream" />
   </item>
 </updates>
