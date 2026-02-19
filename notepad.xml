@@ -2,7 +2,7 @@
 <updates>
   <item>
     <title>Notepad Clone 1.6.11-prerelease</title>
-    <version>1.6.12</version>
+    <version>1.6.11</version>
     <pubDate>2026-02-19</pubDate>
     <description>
       - Startup args can open folders as workspace roots
