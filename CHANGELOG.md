@@ -6,6 +6,17 @@ The format is based on Keep a Changelog, and this project uses Semantic Versioni
 
 ## [Unreleased]
 
+## [1.6.10-prerelease] - 2026-02-19
+
+### Added
+- Startup arguments now support opening folders as workspace roots (shows Workspace Files).
+
+### Changed
+- Startup file opening now keeps the first file active instead of switching to the last.
+
+### Fixed
+- Fixed workspace dialog acceptance check to use `QDialog.Accepted`, preventing a crash.
+
 ### Added
 - New top-level `Search` menu with Notepad++-style actions and submenus:
   - Find in Files, Select-and-Find next/previous, Volatile find next/previous

@@ -81,7 +81,7 @@ class WorkspaceController:
             return
         files = self.workspace_files()
         dlg = WorkspaceFilesDialog(self.window, root, files)
-        if dlg.exec() == dlg.Accepted and dlg.selected_path:
+        if dlg.exec() == QDialog.Accepted and dlg.selected_path:
             self.window._open_file_path(dlg.selected_path)
 
     def search_workspace(self) -> None:
@@ -96,7 +96,7 @@ class WorkspaceController:
         hits = search_files_for_query(self.workspace_files(), query=query, max_results=500, case_sensitive=False)
         results = [WorkspaceSearchResult(path=h.path, line_no=h.line_no, line_text=h.line_text) for h in hits]
         dlg = WorkspaceSearchDialog(self.window, query, results)
-        if dlg.exec() == dlg.Accepted and dlg.selected_path:
+        if dlg.exec() == QDialog.Accepted and dlg.selected_path:
             self.window._open_file_path(dlg.selected_path)
 
     def replace_in_files(self) -> None:

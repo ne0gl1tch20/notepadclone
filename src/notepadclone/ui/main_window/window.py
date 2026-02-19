@@ -209,7 +209,11 @@ class Notepad(UiSetupMixin, FileOpsMixin, EditOpsMixin, ViewOpsMixin, MiscMixin,
 
         # Apply initial settings
         self.apply_settings()
-        self.restore_last_session()
+        startup_files, startup_folders = self._collect_startup_items()
+        if startup_files or startup_folders:
+            self._open_startup_items(startup_files, startup_folders)
+        else:
+            self.restore_last_session()
         self.update_action_states()
         self.log_event("Info", "Notepad initialized")
         if self.settings.get("auto_check_updates", True):
@@ -217,4 +221,61 @@ class Notepad(UiSetupMixin, FileOpsMixin, EditOpsMixin, ViewOpsMixin, MiscMixin,
         QTimer.singleShot(300, self._maybe_show_welcome_tutorial)
 
         # Lock screen enforcement is triggered from main() after the window is shown.
+
+    def _collect_startup_items(self) -> tuple[list[str], list[str]]:
+        app = QApplication.instance()
+        if app is None:
+            return [], []
+        args = list(app.arguments())[1:]
+        if not args:
+            return [], []
+        seen: set[str] = set()
+        files: list[str] = []
+        folders: list[str] = []
+        for arg in args:
+            if not arg:
+                continue
+            if arg.startswith("-") and not Path(arg).exists():
+                continue
+            candidate = Path(arg)
+            if not candidate.is_absolute():
+                candidate = Path.cwd() / candidate
+            try:
+                resolved = candidate.resolve()
+            except Exception:
+                resolved = candidate
+            if not resolved.exists():
+                continue
+            path_str = str(resolved)
+            if path_str in seen:
+                continue
+            seen.add(path_str)
+            if resolved.is_dir():
+                folders.append(path_str)
+            elif resolved.is_file():
+                files.append(path_str)
+        return files, folders
+
+    def _open_startup_items(self, files: list[str], folders: list[str]) -> None:
+        if folders:
+            workspace_root = folders[0]
+            self.settings["workspace_root"] = workspace_root
+            self.show_status_message(f"Workspace: {workspace_root}", 3000)
+            self.show_workspace_files()
+
+        opened: list[str] = []
+        first_opened: str | None = None
+        for path in files:
+            if self._open_file_path(path):
+                opened.append(path)
+                if first_opened is None:
+                    first_opened = path
+        if first_opened:
+            for index in range(self.tab_widget.count()):
+                tab = self.tab_widget.widget(index)
+                if isinstance(tab, EditorTab) and tab.current_file == first_opened:
+                    self.tab_widget.setCurrentIndex(index)
+                    break
+        if opened:
+            self.log_event("Info", f"Opened on startup: {', '.join(opened)}")
 

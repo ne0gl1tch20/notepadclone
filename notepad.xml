@@ -1,17 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <updates>
   <item>
-    <title>Notepad Clone 1.6.9-prerelease</title>
-    <version>1.6.9</version>
-    <pubDate>2026-02-18</pubDate>
+    <title>Notepad Clone 1.6.10-prerelease</title>
+    <version>1.6.10</version>
+    <pubDate>2026-02-19</pubDate>
     <description>
-      - Update checker thread-safety and responsiveness fixes
-      - Non-blocking update dialogs and watchdog timeout handling
-      - Expanded updater diagnostics for easier troubleshooting
-      - Settings lock behavior for update feed URL visibility
+      - Startup args can open folders as workspace roots
+      - First startup file stays active after launch
+      - Fixed workspace dialog acceptance crash
     </description>
     <enclosure
-      url="https://github.com/ne0gl1tch20/neogl1tch20server/releases/download/1/NotepadClone-Setup-1.6.9-prerelease.exe"
+      url="https://github.com/ne0gl1tch20/neogl1tch20server/releases/download/1/NotepadClone-Setup-1.6.10-prerelease.exe"
       type="application/octet-stream" />
   </item>
 </updates>
