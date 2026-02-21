@@ -3450,6 +3450,7 @@ class MiscMixin:
     def show_about(self) -> None:
         username = getpass.getuser()
         self.log_event("Info", "Opened About dialog")
+        app_mode_text = "You are using the production app." if getattr(sys, "frozen", False) else "You are using the development app."
 
         # --- Read version from file ---
         version_path = resolve_asset_path("version.txt")
@@ -3480,6 +3481,7 @@ class MiscMixin:
     <a href="easteregg"><b>Notepad Clone</b></a><br>
     Simple Notepad clone implemented with PySide6<br>
     Version: <b>{version}</b><br><br>
+    <b>{html_escape(app_mode_text)}</b><br><br>
     Pending update capsule: <b>{capsule_text}</b><br><br>
 
     &copy; 2026 Notepad Clone Project<br>

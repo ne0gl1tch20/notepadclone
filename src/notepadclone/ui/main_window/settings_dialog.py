@@ -311,9 +311,15 @@ class SettingsDialog(QDialog):
         ai_layout.addRow("Update feed URL", self.update_feed_url_edit)
         self._register_search(idx, "Update feed URL", self.update_feed_url_edit)
         self.auto_check_updates_checkbox = self._add_check(ai_layout, idx, "Check updates on startup")
+        self.update_require_signed_checkbox = self._add_check(ai_layout, idx, "Require signed update metadata")
+        self.update_signing_key_edit = QLineEdit(ai)
+        self.update_signing_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        ai_layout.addRow("Update signing key (HMAC)", self.update_signing_key_edit)
+        self._register_search(idx, "Update signing key", self.update_signing_key_edit)
         self.ai_send_redact_emails_checkbox = self._add_check(ai_layout, idx, "Redact emails before AI send")
         self.ai_send_redact_paths_checkbox = self._add_check(ai_layout, idx, "Redact file paths before AI send")
         self.ai_send_redact_tokens_checkbox = self._add_check(ai_layout, idx, "Redact tokens before AI send")
+        self.ai_preview_redacted_prompt_checkbox = self._add_check(ai_layout, idx, "Preview redacted prompt before send")
         self.ai_key_storage_mode_combo = self._add_combo(ai_layout, idx, "AI key storage mode", ["settings", "env_only"])
         self.ai_private_mode_checkbox = self._add_check(ai_layout, idx, "Enable AI private mode (disable AI calls)")
         self.ai_cost_rate_spin = QDoubleSpinBox(ai)
@@ -385,6 +391,11 @@ class SettingsDialog(QDialog):
             advanced_layout,
             idx,
             "Save debug logs to app data and write crash traceback logs",
+        )
+        self.plugin_startup_safe_mode_checkbox = self._add_check(
+            advanced_layout,
+            idx,
+            "Plugin startup safe mode (skip loading plugins at startup)",
         )
         self.settings_schema_version_label = QLabel("2", advanced)
         advanced_layout.addRow("Settings schema version", self.settings_schema_version_label)
@@ -553,9 +564,12 @@ class SettingsDialog(QDialog):
         self.ai_model_edit.setText(str(s.get("ai_model", "gemini-3-flash-preview")))
         self.update_feed_url_edit.setText(str(s.get("update_feed_url", DEFAULT_UPDATE_FEED_URL)))
         self.auto_check_updates_checkbox.setChecked(bool(s.get("auto_check_updates", True)))
+        self.update_require_signed_checkbox.setChecked(bool(s.get("update_require_signed_metadata", False)))
+        self.update_signing_key_edit.setText(str(s.get("update_signing_key", "")))
         self.ai_send_redact_emails_checkbox.setChecked(bool(s.get("ai_send_redact_emails", False)))
         self.ai_send_redact_paths_checkbox.setChecked(bool(s.get("ai_send_redact_paths", False)))
         self.ai_send_redact_tokens_checkbox.setChecked(bool(s.get("ai_send_redact_tokens", True)))
+        self.ai_preview_redacted_prompt_checkbox.setChecked(bool(s.get("ai_preview_redacted_prompt", True)))
         self.ai_key_storage_mode_combo.setCurrentText(str(s.get("ai_key_storage_mode", "settings")))
         self.ai_private_mode_checkbox.setChecked(bool(s.get("ai_private_mode", False)))
         self.ai_cost_rate_spin.setValue(float(s.get("ai_estimated_cost_per_1k_tokens", 0.0005) or 0.0005))
@@ -570,6 +584,7 @@ class SettingsDialog(QDialog):
         self.experimental_checkbox.setChecked(bool(s.get("experimental_features", False)))
         self.debug_telemetry_checkbox.setChecked(bool(s.get("debug_telemetry_enabled", False)))
         self.save_debug_logs_checkbox.setChecked(bool(s.get("save_debug_logs_to_appdata", False)))
+        self.plugin_startup_safe_mode_checkbox.setChecked(bool(s.get("plugin_startup_safe_mode", False)))
         self.settings_schema_version_label.setText(str(int(s.get("settings_schema_version", 2))))
 
     def _collect_settings(self) -> dict:
@@ -629,9 +644,12 @@ class SettingsDialog(QDialog):
         s["ai_model"] = self.ai_model_edit.text().strip() or "gemini-3-flash-preview"
         s["update_feed_url"] = self.update_feed_url_edit.text().strip() or DEFAULT_UPDATE_FEED_URL
         s["auto_check_updates"] = self.auto_check_updates_checkbox.isChecked()
+        s["update_require_signed_metadata"] = self.update_require_signed_checkbox.isChecked()
+        s["update_signing_key"] = self.update_signing_key_edit.text().strip()
         s["ai_send_redact_emails"] = self.ai_send_redact_emails_checkbox.isChecked()
         s["ai_send_redact_paths"] = self.ai_send_redact_paths_checkbox.isChecked()
         s["ai_send_redact_tokens"] = self.ai_send_redact_tokens_checkbox.isChecked()
+        s["ai_preview_redacted_prompt"] = self.ai_preview_redacted_prompt_checkbox.isChecked()
         s["ai_key_storage_mode"] = self.ai_key_storage_mode_combo.currentText()
         s["ai_private_mode"] = self.ai_private_mode_checkbox.isChecked()
         s["ai_estimated_cost_per_1k_tokens"] = float(self.ai_cost_rate_spin.value())
@@ -646,6 +664,7 @@ class SettingsDialog(QDialog):
         s["experimental_features"] = self.experimental_checkbox.isChecked()
         s["debug_telemetry_enabled"] = self.debug_telemetry_checkbox.isChecked()
         s["save_debug_logs_to_appdata"] = self.save_debug_logs_checkbox.isChecked()
+        s["plugin_startup_safe_mode"] = self.plugin_startup_safe_mode_checkbox.isChecked()
         s["settings_schema_version"] = 2
         return migrate_settings(s)
 

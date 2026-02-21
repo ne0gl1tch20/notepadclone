@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Callable, Iterator
 from datetime import datetime
 
@@ -24,6 +25,41 @@ MISSING_API_KEY_MESSAGE = (
     "I don't have an API key! Do it in Settings > Preferences > AI and Updates > Gemini API Key! "
     "To add your own API Key, visit https://aistudio.google.com/app/api-keys"
 )
+
+EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b")
+WINDOWS_PATH_RE = re.compile(r"(?<!\w)(?:[A-Za-z]:\\|\\\\)[^\s\"'<>|?*]+")
+POSIX_PATH_RE = re.compile(r"(?<![\w:])/(?:[^/\s]+/)+[^/\s]+")
+ASSIGNMENT_SECRET_RE = re.compile(
+    r"(?i)\b(api[_-]?key|access[_-]?token|token|secret|password|passwd)\b\s*[:=]\s*([^\s,;]+)"
+)
+BEARER_TOKEN_RE = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._\-~+/=]{8,}\b")
+JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_\-]+?\.[A-Za-z0-9_\-]+?\.[A-Za-z0-9_\-]+?\b")
+
+
+def sanitize_prompt_text(prompt: str, settings: dict) -> tuple[str, list[str]]:
+    redacted = prompt
+    changes: list[str] = []
+    if bool(settings.get("ai_send_redact_emails", False)):
+        updated, count = EMAIL_RE.subn("[REDACTED_EMAIL]", redacted)
+        if count:
+            redacted = updated
+            changes.append(f"emails({count})")
+    if bool(settings.get("ai_send_redact_paths", False)):
+        updated, count_win = WINDOWS_PATH_RE.subn("[REDACTED_PATH]", redacted)
+        updated, count_posix = POSIX_PATH_RE.subn("[REDACTED_PATH]", updated)
+        total = count_win + count_posix
+        if total:
+            redacted = updated
+            changes.append(f"paths({total})")
+    if bool(settings.get("ai_send_redact_tokens", True)):
+        updated, count_assign = ASSIGNMENT_SECRET_RE.subn(r"\1=[REDACTED_TOKEN]", redacted)
+        updated, count_bearer = BEARER_TOKEN_RE.subn("Bearer [REDACTED_TOKEN]", updated)
+        updated, count_jwt = JWT_RE.subn("[REDACTED_TOKEN]", updated)
+        total = count_assign + count_bearer + count_jwt
+        if total:
+            redacted = updated
+            changes.append(f"tokens({total})")
+    return redacted, changes
 
 
 class _AIWorker(QObject):
@@ -217,6 +253,36 @@ class AIResultDialog(QDialog):
         tab.text_edit.replace_selection(self.output.toPlainText())
 
 
+class AIRedactionPreviewDialog(QDialog):
+    def __init__(self, parent, action_title: str, changes: list[str], original: str, redacted: str) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("AI Prompt Redaction Preview")
+        self.resize(920, 620)
+        layout = QVBoxLayout(self)
+        summary = QLabel(
+            f"{action_title}: redactions applied ({', '.join(changes)}). The redacted prompt will be sent.",
+            self,
+        )
+        layout.addWidget(summary)
+        panes = QHBoxLayout()
+        left = QTextEdit(self)
+        right = QTextEdit(self)
+        left.setReadOnly(True)
+        right.setReadOnly(True)
+        left.setPlainText(original)
+        right.setPlainText(redacted)
+        panes.addWidget(left, 1)
+        panes.addWidget(right, 1)
+        layout.addLayout(panes, 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, Qt.Horizontal, self)
+        ok_btn = buttons.button(QDialogButtonBox.Ok)
+        if ok_btn is not None:
+            ok_btn.setText("Send Redacted Prompt")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+
 class AIController:
     def __init__(self, window) -> None:
         self.window = window
@@ -225,8 +291,9 @@ class AIController:
         self._active_stream_thread: QThread | None = None
 
     def _api_key(self) -> str:
+        storage_mode = str(self.window.settings.get("ai_key_storage_mode", "settings") or "settings").strip().lower()
         configured = str(self.window.settings.get("gemini_api_key", "") or "").strip()
-        if configured:
+        if storage_mode != "env_only" and configured:
             return configured
         return str(os.getenv("GEMINI_API_KEY", "")).strip()
 
@@ -276,6 +343,20 @@ class AIController:
         if hasattr(self.window, "save_settings_to_disk"):
             self.window.save_settings_to_disk()
 
+    def _prepare_prompt_for_send(self, prompt: str, action_title: str) -> str | None:
+        candidate = prompt.strip()
+        if not candidate:
+            return None
+        redacted, changes = sanitize_prompt_text(candidate, self.window.settings)
+        if not changes:
+            return redacted
+        if bool(self.window.settings.get("ai_preview_redacted_prompt", True)):
+            dialog = AIRedactionPreviewDialog(self.window, action_title, changes, candidate, redacted)
+            if dialog.exec() != QDialog.Accepted:
+                self.window.show_status_message("AI request canceled by redaction preview.", 3000)
+                return None
+        return redacted
+
     def _start_stream_generation(
         self,
         prompt: str,
@@ -285,18 +366,20 @@ class AIController:
         on_error: Callable[[str], None],
         on_cancel: Callable[[str], None] | None = None,
     ) -> None:
-        prompt = prompt.strip()
-        if not prompt:
+        prepared_prompt = self._prepare_prompt_for_send(prompt, action_name)
+        if not prepared_prompt:
             return
         api_key = self._api_key()
         model = self._model()
 
         thread = QThread(self.window)
-        worker = _AIStreamWorker(prompt, api_key, model)
+        worker = _AIStreamWorker(prepared_prompt, api_key, model)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.chunk.connect(on_chunk)
-        worker.finished.connect(lambda text: self._record_ai_metrics(action=action_name, prompt=prompt, response=text, model=model))
+        worker.finished.connect(
+            lambda text: self._record_ai_metrics(action=action_name, prompt=prepared_prompt, response=text, model=model)
+        )
         worker.finished.connect(on_done)
         worker.failed.connect(on_error)
         if on_cancel is not None:
@@ -330,17 +413,19 @@ class AIController:
         auto_insert: bool = False,
         on_result: Callable[[str], None] | None = None,
     ) -> None:
-        prompt = prompt.strip()
-        if not prompt:
+        prepared_prompt = self._prepare_prompt_for_send(prompt, action_name)
+        if not prepared_prompt:
             return
         api_key = self._api_key()
         model = self._model()
 
         thread = QThread(self.window)
-        worker = _AIWorker(prompt, api_key, model)
+        worker = _AIWorker(prepared_prompt, api_key, model)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
-        worker.finished.connect(lambda text: self._record_ai_metrics(action=action_name, prompt=prompt, response=text, model=model))
+        worker.finished.connect(
+            lambda text: self._record_ai_metrics(action=action_name, prompt=prepared_prompt, response=text, model=model)
+        )
         worker.finished.connect(lambda text: self._on_result(thread, result_title, text, auto_insert, on_result=on_result))
         worker.failed.connect(lambda message: self._on_error(thread, message, result_title, model))
         worker.finished.connect(thread.quit)

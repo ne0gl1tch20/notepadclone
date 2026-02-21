@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -12,6 +13,8 @@ class UpdateInfo:
     changelog: str
     download_url: str
     pub_date: str
+    sha256: str
+    signature: str
 
 
 def parse_update_feed(xml_text: str) -> UpdateInfo | None:
@@ -33,6 +36,8 @@ def parse_update_feed(xml_text: str) -> UpdateInfo | None:
     pub_date = _first_text(item, {"pubDate", "published", "updated", "date"}) or ""
     version = _extract_version(item) or _extract_version(root) or ""
     download_url = _extract_download_url(item) or _extract_download_url(root) or ""
+    sha256 = _first_text(item, {"sha256", "checksum", "hash"}) or _first_text(root, {"sha256", "checksum", "hash"}) or ""
+    signature = _first_text(item, {"signature", "metadataSignature"}) or _first_text(root, {"signature", "metadataSignature"}) or ""
 
     if not version and not download_url:
         return None
@@ -42,6 +47,8 @@ def parse_update_feed(xml_text: str) -> UpdateInfo | None:
         changelog=changelog.strip(),
         download_url=download_url.strip(),
         pub_date=pub_date.strip(),
+        sha256=sha256.strip().lower(),
+        signature=signature.strip(),
     )
 
 
@@ -79,6 +86,8 @@ def _parse_plaintext_feed(text: str) -> UpdateInfo | None:
         changelog=changelog,
         download_url=download_url,
         pub_date=pub_date,
+        sha256="",
+        signature="",
     )
 
 
@@ -135,3 +144,22 @@ def _extract_download_url(node: ET.Element) -> str | None:
 def _version_tuple(version: str) -> tuple[int, ...]:
     parts = [int(piece) for piece in re.findall(r"\d+", version)]
     return tuple(parts) if parts else (0,)
+
+
+def metadata_signature_payload(info: UpdateInfo) -> bytes:
+    return "|".join(
+        [
+            info.version.strip(),
+            info.download_url.strip(),
+            info.sha256.strip().lower(),
+            info.pub_date.strip(),
+        ]
+    ).encode("utf-8")
+
+
+def verify_metadata_signature(info: UpdateInfo, signing_key: str) -> bool:
+    key = (signing_key or "").strip()
+    if not key or not info.signature.strip():
+        return False
+    expected = hmac.new(key.encode("utf-8"), metadata_signature_payload(info), "sha256").hexdigest()
+    return hmac.compare_digest(expected, info.signature.strip().lower())

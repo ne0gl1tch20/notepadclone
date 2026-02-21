@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 import ast
+import hashlib
+import hmac
 import json
 import re
+import secrets
+import shutil
+import sys
 import threading
+import time
+import uuid
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime
@@ -33,6 +40,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from ..app_settings.paths import get_plugins_dir_path
 
 
 def _root() -> Path:
@@ -47,7 +55,45 @@ class PluginRecord:
     permissions: set[str]
     path: Path
     enabled: bool
+    digest: str
+    quarantined: bool = False
     instance: Any = None
+
+
+def compute_plugin_digest(plugin_dir: Path) -> str:
+    hasher = hashlib.sha256()
+    for rel in ("plugin.json", "plugin.py"):
+        path = plugin_dir / rel
+        if not path.exists():
+            continue
+        hasher.update(rel.encode("utf-8"))
+        hasher.update(b"\0")
+        hasher.update(path.read_bytes())
+        hasher.update(b"\0")
+    return hasher.hexdigest()
+
+
+def apply_text_operations(text: str, operations: list[dict[str, Any]]) -> str:
+    out = text
+    for op in operations:
+        kind = str(op.get("op", "")).strip().lower()
+        if kind == "insert":
+            index = int(op.get("index", -1))
+            payload = str(op.get("text", ""))
+            if index < 0 or index > len(out):
+                raise ValueError("insert index out of bounds")
+            out = out[:index] + payload + out[index:]
+            continue
+        if kind in {"delete", "replace"}:
+            start = int(op.get("start", -1))
+            end = int(op.get("end", -1))
+            if start < 0 or end < start or end > len(out):
+                raise ValueError(f"{kind} range out of bounds")
+            replacement = str(op.get("text", "")) if kind == "replace" else ""
+            out = out[:start] + replacement + out[end:]
+            continue
+        raise ValueError(f"unsupported operation: {kind}")
+    return out
 
 
 class PluginAPI:
@@ -86,10 +132,41 @@ class PluginAPI:
 class PluginHost:
     def __init__(self, window) -> None:
         self.window = window
-        self.plugins_dir = _root() / "plugins"
+        self.plugins_dir = get_plugins_dir_path()
         self.plugins_dir.mkdir(parents=True, exist_ok=True)
+        self._install_example_plugins_if_missing()
         self.records: list[PluginRecord] = []
-        self.reload()
+        self.reload(startup=True)
+
+    def _packaged_plugins_dir(self) -> Path:
+        if getattr(sys, "frozen", False):
+            meipass = Path(str(getattr(sys, "_MEIPASS", "")))
+            if meipass:
+                bundled = meipass / "plugins"
+                if bundled.exists():
+                    return bundled
+        return _root() / "plugins"
+
+    def runtime_mode_label(self) -> str:
+        return "production" if getattr(sys, "frozen", False) else "development"
+
+    def _install_example_plugins_if_missing(self) -> None:
+        source_root = self._packaged_plugins_dir()
+        if not source_root.exists():
+            return
+        for name in ("example_word_tools", "example_hello_network"):
+            src_dir = source_root / name
+            if not src_dir.exists() or not src_dir.is_dir():
+                continue
+            if not (src_dir / "plugin.json").exists() or not (src_dir / "plugin.py").exists():
+                continue
+            dst_dir = self.plugins_dir / name
+            if dst_dir.exists():
+                continue
+            try:
+                shutil.copytree(src_dir, dst_dir)
+            except Exception as exc:  # noqa: BLE001
+                self.window.log_event("Error", f"Could not install bundled example plugin {name}: {exc}")
 
     def _enabled(self) -> set[str]:
         return {str(x) for x in self.window.settings.get("enabled_plugins", []) if isinstance(x, str)}
@@ -98,8 +175,67 @@ class PluginHost:
         self.window.settings["enabled_plugins"] = sorted(ids)
         self.window.save_settings_to_disk()
 
+    def _trusted_hashes(self) -> dict[str, str]:
+        raw = self.window.settings.get("trusted_plugin_hashes", {})
+        if not isinstance(raw, dict):
+            return {}
+        out: dict[str, str] = {}
+        for key, value in raw.items():
+            k = str(key).strip()
+            v = str(value).strip().lower()
+            if k and v:
+                out[k] = v
+        return out
+
+    def _save_trusted_hashes(self, mapping: dict[str, str]) -> None:
+        self.window.settings["trusted_plugin_hashes"] = dict(sorted(mapping.items()))
+        self.window.save_settings_to_disk()
+
+    def _quarantined(self) -> set[str]:
+        raw = self.window.settings.get("quarantined_plugins", [])
+        return {str(x).strip() for x in raw if str(x).strip()}
+
+    def _save_quarantined(self, ids: set[str]) -> None:
+        self.window.settings["quarantined_plugins"] = sorted(ids)
+        self.window.save_settings_to_disk()
+
+    def _is_startup_safe_mode(self) -> bool:
+        return bool(self.window.settings.get("plugin_startup_safe_mode", False))
+
+    def _trust_prompt(self, rec: PluginRecord) -> bool:
+        box = QMessageBox(self.window)
+        box.setWindowTitle("Trust Plugin")
+        box.setIcon(QMessageBox.Warning)
+        box.setText(f"Plugin '{rec.name}' is not trusted yet.")
+        box.setInformativeText("Trust this plugin hash and allow it to load?")
+        box.setDetailedText(f"Plugin ID: {rec.plugin_id}\nDigest (SHA256): {rec.digest}")
+        trust_btn = box.addButton("Trust and Load", QMessageBox.AcceptRole)
+        box.addButton("Cancel", QMessageBox.RejectRole)
+        box.exec()
+        return box.clickedButton() == trust_btn
+
+    def _is_plugin_trusted(self, rec: PluginRecord) -> bool:
+        trusted = self._trusted_hashes()
+        return trusted.get(rec.plugin_id, "").strip().lower() == rec.digest.lower()
+
+    def _mark_trusted(self, rec: PluginRecord) -> None:
+        trusted = self._trusted_hashes()
+        trusted[rec.plugin_id] = rec.digest.lower()
+        self._save_trusted_hashes(trusted)
+
+    def _quarantine_plugin(self, rec: PluginRecord, reason: str) -> None:
+        quarantined = self._quarantined()
+        quarantined.add(rec.plugin_id)
+        self._save_quarantined(quarantined)
+        enabled = self._enabled()
+        if rec.plugin_id in enabled:
+            enabled.discard(rec.plugin_id)
+            self._save_enabled(enabled)
+        self.window.log_event("Error", f"Plugin quarantined ({rec.plugin_id}): {reason}")
+
     def discover(self) -> list[PluginRecord]:
         enabled = self._enabled()
+        quarantined = self._quarantined()
         out: list[PluginRecord] = []
         for folder in sorted(self.plugins_dir.iterdir()):
             if not folder.is_dir():
@@ -128,17 +264,30 @@ class PluginHost:
                     permissions=perms,
                     path=folder,
                     enabled=pid in enabled,
+                    digest=compute_plugin_digest(folder),
+                    quarantined=pid in quarantined,
                 )
             )
         return out
 
-    def reload(self) -> None:
+    def reload(self, *, startup: bool = False) -> None:
         import importlib.util
 
         self.records = self.discover()
+        if startup and self._is_startup_safe_mode():
+            self.window.show_status_message("Plugin startup safe mode is enabled.", 3000)
+            return
         for rec in self.records:
             if not rec.enabled:
                 continue
+            if rec.quarantined:
+                self.window.log_event("Info", f"Skipping quarantined plugin: {rec.plugin_id}")
+                continue
+            if not self._is_plugin_trusted(rec):
+                if not self._trust_prompt(rec):
+                    self.window.log_event("Info", f"Plugin trust denied: {rec.plugin_id}")
+                    continue
+                self._mark_trusted(rec)
             try:
                 spec = importlib.util.spec_from_file_location(f"np_plugin_{rec.plugin_id}", rec.path / "plugin.py")
                 if spec is None or spec.loader is None:
@@ -153,10 +302,24 @@ class PluginHost:
                 if callable(on_load):
                     on_load()
             except Exception as exc:  # noqa: BLE001
-                self.window.log_event("Error", f"Plugin load failed ({rec.plugin_id}): {exc}")
+                self._quarantine_plugin(rec, str(exc))
+                self.window.show_status_message(f"Plugin quarantined: {rec.plugin_id}", 3500)
 
     def set_enabled(self, plugin_id: str, enabled: bool) -> None:
         ids = self._enabled()
+        rec = next((x for x in self.discover() if x.plugin_id == plugin_id), None)
+        if enabled and rec is not None:
+            if rec.quarantined:
+                QMessageBox.warning(
+                    self.window,
+                    "Plugin Quarantined",
+                    f"Plugin '{plugin_id}' is quarantined due to a previous failure.\nRemove it from quarantine first.",
+                )
+                return
+            if not self._is_plugin_trusted(rec):
+                if not self._trust_prompt(rec):
+                    return
+                self._mark_trusted(rec)
         if enabled:
             ids.add(plugin_id)
         else:
@@ -175,12 +338,15 @@ class PluginManagerDialog(QDialog):
         v.addWidget(self.list_widget, 1)
         row = QHBoxLayout()
         reload_btn = QPushButton("Reload", self)
+        clear_quarantine_btn = QPushButton("Clear Quarantine", self)
         close_btn = QPushButton("Close", self)
         row.addWidget(reload_btn)
+        row.addWidget(clear_quarantine_btn)
         row.addStretch(1)
         row.addWidget(close_btn)
         v.addLayout(row)
         reload_btn.clicked.connect(self._reload)
+        clear_quarantine_btn.clicked.connect(self._clear_quarantine)
         close_btn.clicked.connect(self.accept)
         self._populate()
 
@@ -193,7 +359,14 @@ class PluginManagerDialog(QDialog):
             row.setContentsMargins(6, 4, 6, 4)
             check = QCheckBox(f"{rec.name} ({rec.plugin_id})", item_widget)
             check.setChecked(rec.enabled)
-            info = QLabel(f"{rec.description} | perms: {', '.join(sorted(rec.permissions)) or 'none'}", item_widget)
+            state = "QUARANTINED" if rec.quarantined else "ok"
+            info = QLabel(
+                (
+                    f"{rec.description} | perms: {', '.join(sorted(rec.permissions)) or 'none'} | "
+                    f"state: {state} | sha256: {rec.digest[:12]}..."
+                ),
+                item_widget,
+            )
             row.addWidget(check)
             row.addWidget(info, 1)
             holder.setSizeHint(item_widget.sizeHint())
@@ -203,6 +376,11 @@ class PluginManagerDialog(QDialog):
 
     def _reload(self) -> None:
         self.host.reload()
+        self._populate()
+
+    def _clear_quarantine(self) -> None:
+        self.host.window.settings["quarantined_plugins"] = []
+        self.host.window.save_settings_to_disk()
         self._populate()
 
 
@@ -266,15 +444,27 @@ class CollaborationServer:
         self.window = window
         self.server: ThreadingHTTPServer | None = None
         self.thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+        self._revision = 0
+        self._events: list[dict[str, Any]] = []
+        self._clients: dict[str, dict[str, Any]] = {}
+        self._read_write = False
+        self._session_text = ""
+
+    def _ensure_token(self) -> str:
+        token = str(self.window.settings.get("collab_token", "") or "").strip()
+        if token:
+            return token
+        token = secrets.token_urlsafe(24)
+        self.window.settings["collab_token"] = token
+        self.window.save_settings_to_disk()
+        return token
 
     def start(self, port: int, read_write: bool) -> None:
         if self.server is not None:
             return
-        token = str(self.window.settings.get("collab_token", "") or "")
-        if not token:
-            token = f"np-{datetime.now().strftime('%H%M%S')}"
-            self.window.settings["collab_token"] = token
-            self.window.save_settings_to_disk()
+        token = self._ensure_token()
+        self._read_write = bool(read_write)
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -286,39 +476,152 @@ class CollaborationServer:
                 self.end_headers()
                 self.wfile.write(body)
 
+            def _raw_body(self) -> str:
+                size = int(self.headers.get("Content-Length", "0") or 0)
+                raw = (self.rfile.read(size) if size > 0 else b"") or b""
+                return raw.decode("utf-8", errors="replace")
+
+            def _read_json(self) -> tuple[dict[str, Any], str]:
+                raw = self._raw_body()
+                if not raw:
+                    return {}, raw
+                try:
+                    data = json.loads(raw)
+                except Exception:
+                    return {}, raw
+                return data if isinstance(data, dict) else {}, raw
+
+            def _authorized(self) -> bool:
+                auth = str(self.headers.get("Authorization", "") or "")
+                if auth.startswith("Bearer "):
+                    supplied = auth[7:].strip()
+                else:
+                    supplied = str(self.headers.get("X-Collab-Token", "") or "").strip()
+                return bool(supplied) and hmac.compare_digest(supplied, token)
+
+            def _verify_signature(self, method: str, path: str, raw_body: str) -> bool:
+                timestamp = str(self.headers.get("X-Collab-Timestamp", "") or "").strip()
+                signature = str(self.headers.get("X-Collab-Signature", "") or "").strip().lower()
+                if not timestamp or not signature:
+                    return False
+                try:
+                    ts = int(timestamp)
+                except Exception:
+                    return False
+                now = int(time.time())
+                if abs(now - ts) > 120:
+                    return False
+                payload = f"{method}\n{path}\n{timestamp}\n{raw_body}".encode("utf-8")
+                expected = hmac.new(token.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+                return hmac.compare_digest(signature, expected)
+
             def do_GET(self) -> None:  # noqa: N802
                 parsed = urlparse(self.path)
-                if parsed.path != "/state":
-                    self._send(404, {"error": "not_found"})
-                    return
-                if parse_qs(parsed.query).get("token", [""])[0] != token:
+                if not self._authorized():
                     self._send(403, {"error": "forbidden"})
                     return
+                if parsed.path != "/state":
+                    if parsed.path != "/events":
+                        self._send(404, {"error": "not_found"})
+                        return
+                    since = parse_qs(parsed.query).get("since", ["0"])[0]
+                    try:
+                        since_rev = int(since)
+                    except Exception:
+                        since_rev = 0
+                    with owner._lock:
+                        events = [event for event in owner._events if int(event.get("rev", 0)) > since_rev]
+                    self._send(200, {"events": events[-100:]})
+                    return
                 tab = owner.window.active_tab()
-                self._send(200, {"text": tab.text_edit.get_text() if tab else "", "rw": bool(read_write)})
+                with owner._lock:
+                    revision = owner._revision
+                    clients = len(owner._clients)
+                    text = owner._session_text if owner._session_text else (tab.text_edit.get_text() if tab else "")
+                self._send(
+                    200,
+                    {
+                        "text": text,
+                        "rw": bool(owner._read_write),
+                        "revision": revision,
+                        "clients": clients,
+                    },
+                )
 
             def do_POST(self) -> None:  # noqa: N802
                 parsed = urlparse(self.path)
-                if parsed.path != "/apply":
-                    self._send(404, {"error": "not_found"})
-                    return
-                if not read_write:
-                    self._send(403, {"error": "read_only"})
-                    return
-                if parse_qs(parsed.query).get("token", [""])[0] != token:
+                if not self._authorized():
                     self._send(403, {"error": "forbidden"})
                     return
-                size = int(self.headers.get("Content-Length", "0"))
-                payload = json.loads((self.rfile.read(size) or b"{}").decode("utf-8"))
-                tab = owner.window.active_tab()
-                if tab is not None and not tab.text_edit.is_read_only():
-                    tab.text_edit.set_text(str(payload.get("text", "")))
-                    tab.text_edit.set_modified(True)
-                self._send(200, {"ok": True})
+                payload, raw_body = self._read_json()
+                if parsed.path == "/join":
+                    name = str(payload.get("name", "") or "client").strip()[:64] or "client"
+                    client_id = str(payload.get("client_id", "") or "").strip()[:64] or uuid.uuid4().hex[:16]
+                    with owner._lock:
+                        owner._clients[client_id] = {"name": name, "last_seen": int(time.time())}
+                        revision = owner._revision
+                        text = owner._session_text
+                    self._send(
+                        200,
+                        {"client_id": client_id, "revision": revision, "text": text},
+                    )
+                    return
+                if parsed.path != "/edit":
+                    self._send(404, {"error": "not_found"})
+                    return
+                if not owner._read_write:
+                    self._send(403, {"error": "read_only"})
+                    return
+                if not self._verify_signature("POST", parsed.path, raw_body):
+                    self._send(403, {"error": "bad_signature"})
+                    return
+                client_id = str(payload.get("client_id", "") or "").strip()
+                base_revision = int(payload.get("base_revision", -1))
+                operations = payload.get("operations", [])
+                if not client_id or not isinstance(operations, list):
+                    self._send(400, {"error": "bad_request"})
+                    return
+                with owner._lock:
+                    if client_id not in owner._clients:
+                        self._send(403, {"error": "unknown_client"})
+                        return
+                    owner._clients[client_id]["last_seen"] = int(time.time())
+                    current_revision = owner._revision
+                if base_revision != current_revision:
+                    self._send(409, {"error": "revision_conflict", "current_revision": current_revision})
+                    return
+                with owner._lock:
+                    current_text = owner._session_text
+                try:
+                    new_text = apply_text_operations(current_text, operations)
+                except Exception as exc:
+                    self._send(400, {"error": "invalid_operations", "detail": str(exc)})
+                    return
+                with owner._lock:
+                    owner._session_text = new_text
+                    owner._revision += 1
+                    rev = owner._revision
+                    owner._events.append(
+                        {
+                            "rev": rev,
+                            "client_id": client_id,
+                            "operations": operations[:50],
+                            "timestamp": datetime.now().isoformat(timespec="seconds"),
+                        }
+                    )
+                    owner._events = owner._events[-300:]
+                QTimer.singleShot(0, lambda txt=new_text: owner._apply_session_text_to_active_tab(txt))
+                self._send(200, {"ok": True, "revision": rev})
 
             def log_message(self, format: str, *args) -> None:  # noqa: A003
                 return
 
+        with self._lock:
+            self._revision = 0
+            self._events = []
+            self._clients = {}
+            tab = self.window.active_tab()
+            self._session_text = tab.text_edit.get_text() if tab is not None else ""
         self.server = ThreadingHTTPServer(("127.0.0.1", int(port)), Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -331,11 +634,25 @@ class CollaborationServer:
         self.server = None
         self.thread = None
 
+    def _apply_session_text_to_active_tab(self, text: str) -> None:
+        tab = self.window.active_tab()
+        if tab is None or tab.text_edit.is_read_only():
+            return
+        tab.text_edit.set_text(text)
+        tab.text_edit.set_modified(True)
+
 
 class AdvancedFeaturesController:
     def __init__(self, window) -> None:
         self.window = window
         self.plugin_host = PluginHost(window)
+        try:
+            self.window.show_status_message(
+                f"Plugins loaded from: {self.plugin_host.plugins_dir} ({self.plugin_host.runtime_mode_label()})",
+                4500,
+            )
+        except Exception:
+            pass
         self.minimap_dock = MinimapDock(window)
         self.minimap_dock.hide()
         window.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.minimap_dock)
@@ -641,7 +958,16 @@ class AdvancedFeaturesController:
             self.window.save_settings_to_disk()
             self.collab.start(int(port_spin.value()), bool(rw_check.isChecked()))
             token = str(self.window.settings.get("collab_token", ""))
-            QMessageBox.information(self.window, "LAN Collaboration", f"http://127.0.0.1:{int(port_spin.value())}/state?token={token}")
+            QMessageBox.information(
+                self.window,
+                "LAN Collaboration",
+                (
+                    f"Server: http://127.0.0.1:{int(port_spin.value())}\n"
+                    "Use Authorization header:\n"
+                    f"Bearer {token}\n\n"
+                    "Endpoints: POST /join, GET /state, GET /events?since=<rev>, POST /edit"
+                ),
+            )
 
         start_btn.clicked.connect(start)
         dlg.exec()

@@ -10,7 +10,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from notepadclone.ui.ai_controller import AIController, _generate_sync
+from notepadclone.ui.ai_controller import AIController, _generate_sync, sanitize_prompt_text
 
 
 class _WindowStub:
@@ -109,6 +109,26 @@ class AIControllerTests(unittest.TestCase):
         window = _WindowStub({"gemini_api_key": ""})
         controller = AIController(window)
         self.assertFalse(controller.cancel_active_chat_request())
+
+    def test_sanitize_prompt_redacts_emails_paths_and_tokens(self) -> None:
+        prompt = (
+            "Email me at a@b.com\n"
+            "Path: C:\\Users\\me\\secret.txt and /home/me/token.txt\n"
+            "api_key=abcd1234\n"
+            "Bearer abcdefghijklmnop"
+        )
+        redacted, changes = sanitize_prompt_text(
+            prompt,
+            {
+                "ai_send_redact_emails": True,
+                "ai_send_redact_paths": True,
+                "ai_send_redact_tokens": True,
+            },
+        )
+        self.assertIn("[REDACTED_EMAIL]", redacted)
+        self.assertIn("[REDACTED_PATH]", redacted)
+        self.assertIn("[REDACTED_TOKEN]", redacted)
+        self.assertTrue(changes)
 
 
 if __name__ == "__main__":

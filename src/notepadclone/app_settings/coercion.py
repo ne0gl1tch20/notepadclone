@@ -144,12 +144,28 @@ def migrate_settings(settings: dict) -> dict:
                 seqs = [str(v).strip() for v in value if str(v).strip()]
                 cleaned_map[key] = seqs
     current["shortcut_map"] = cleaned_map
+    trusted_hashes = current.get("trusted_plugin_hashes", {})
+    if isinstance(trusted_hashes, dict):
+        current["trusted_plugin_hashes"] = {
+            str(k): str(v).strip().lower() for k, v in trusted_hashes.items() if str(k).strip() and str(v).strip()
+        }
+    else:
+        current["trusted_plugin_hashes"] = {}
+    raw_quarantine = current.get("quarantined_plugins", [])
+    if isinstance(raw_quarantine, list):
+        current["quarantined_plugins"] = sorted({str(x).strip() for x in raw_quarantine if str(x).strip()})
+    else:
+        current["quarantined_plugins"] = []
+    current["plugin_startup_safe_mode"] = coerce_bool(current.get("plugin_startup_safe_mode", False), False)
 
     current["ai_send_redact_emails"] = coerce_bool(current.get("ai_send_redact_emails", False), False)
     current["ai_send_redact_paths"] = coerce_bool(current.get("ai_send_redact_paths", False), False)
     current["ai_send_redact_tokens"] = coerce_bool(current.get("ai_send_redact_tokens", True), True)
+    current["ai_preview_redacted_prompt"] = coerce_bool(current.get("ai_preview_redacted_prompt", True), True)
     current["ai_key_storage_mode"] = _coerce_enum(current.get("ai_key_storage_mode"), {"settings", "env_only"}, "settings")
     current["update_feed_url"] = _sanitize_update_feed_url(current.get("update_feed_url"), defaults.get("update_feed_url", ""))
+    current["update_require_signed_metadata"] = coerce_bool(current.get("update_require_signed_metadata", False), False)
+    current["update_signing_key"] = str(current.get("update_signing_key", "") or "").strip()
 
     current["recovery_mode"] = _coerce_enum(
         current.get("recovery_mode"),

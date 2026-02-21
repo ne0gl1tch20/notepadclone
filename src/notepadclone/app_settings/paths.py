@@ -34,6 +34,10 @@ def get_translation_cache_path() -> Path:
     return _app_roaming_dir() / "translation_cache.json"
 
 
+def get_plugins_dir_path() -> Path:
+    return _app_roaming_dir() / "plugins"
+
+
 def get_debug_logs_file_path() -> Path:
     return _app_roaming_dir() / "debug_logs.log"
 

@@ -1,16 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <updates>
   <item>
-    <title>Notepad Clone 1.6.11-prerelease</title>
-    <version>1.6.11</version>
-    <pubDate>2026-02-19</pubDate>
+    <title>Notepad Clone 1.6.12-prerelease</title>
+    <version>1.6.12</version>
+    <pubDate>2026-02-21</pubDate>
     <description>
-      - Startup args can open folders as workspace roots
-      - First startup file stays active after launch
-      - Fixed workspace dialog acceptance crash
+      - Fixed freeze when non-English translation triggers on startup/settings language changes
+      - Translation cache misses now resolve asynchronously in background
+      - Improved language-apply responsiveness on large UI trees
     </description>
+    <sha256>026e17cc55e94a508cf102c3bc859fb777e65443c47e3b675b54b0b2a5e162b8</sha256>
     <enclosure
-      url="https://github.com/ne0gl1tch20/notepadclone/raw/refs/heads/main/dist/installer/NotepadClone-Setup-1.6.11-prerelease.exe"
+      url="https://github.com/ne0gl1tch20/notepadclone/raw/refs/heads/main/dist/installer/NotepadClone-Setup-1.6.12-prerelease.exe"
       type="application/octet-stream" />
   </item>
 </updates>

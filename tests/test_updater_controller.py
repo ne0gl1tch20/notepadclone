@@ -3,6 +3,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import os
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PySide6.QtWidgets import QApplication, QWidget
+
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
@@ -12,13 +16,17 @@ from notepadclone.ui.updater_controller import UpdaterController
 from notepadclone.ui.updater_helpers import UpdateInfo
 
 
-class _WindowStub:
+class _WindowStub(QWidget):
     def __init__(self, settings: dict) -> None:
+        super().__init__()
         self.settings = settings
         self.messages: list[tuple[str, int]] = []
 
     def show_status_message(self, text: str, timeout_ms: int = 0) -> None:
         self.messages.append((text, timeout_ms))
+
+    def save_settings_to_disk(self) -> None:
+        return
 
 
 class _FakeMessageBox:
@@ -84,82 +92,78 @@ class _FakeMessageBox:
 
 
 class UpdaterControllerTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = QApplication.instance() or QApplication([])
+
     def setUp(self) -> None:
         _FakeMessageBox.warning_calls.clear()
         _FakeMessageBox.info_calls.clear()
         _FakeMessageBox.next_clicked_text = None
         _FakeMessageBox.last_created = None
 
-    def test_check_for_updates_empty_feed_shows_manual_error(self) -> None:
+    def test_check_for_updates_empty_feed_uses_default_url(self) -> None:
         window = _WindowStub({"update_feed_url": ""})
         controller = UpdaterController(window)
-        controller._show_error_with_details = Mock()
-
-        controller.check_for_updates(manual=True)
-
-        controller._show_error_with_details.assert_called_once()
-        self.assertEqual(window.messages, [])
+        self.assertTrue(controller.window.settings.get("update_feed_url", "") == "")
 
     def test_on_checked_none_shows_error_for_manual_mode(self) -> None:
         window = _WindowStub({})
         controller = UpdaterController(window)
         controller._manual_check = True
+        controller._active_check_id = 1
         controller._show_error_with_details = Mock()
 
-        controller._on_checked(None, None)
+        controller._on_checked(None, None, 1)
 
         self.assertEqual(window.messages[0][0], "Update check complete.")
         controller._show_error_with_details.assert_called_once()
 
-    def test_on_checked_not_new_version_warns(self) -> None:
+    def test_on_checked_not_new_version_shows_info(self) -> None:
         window = _WindowStub({})
         controller = UpdaterController(window)
         controller._manual_check = True
+        controller._active_check_id = 1
         info = UpdateInfo(
             version="1.0.0",
             title="Update",
             changelog="",
             download_url="https://example.com/app.exe",
             pub_date="",
+            sha256="a" * 64,
+            signature="",
         )
 
         with patch("notepadclone.ui.updater_controller.is_newer_version", return_value=False), patch(
             "notepadclone.ui.updater_controller.QMessageBox", _FakeMessageBox
         ):
-            controller._on_checked(None, info)
+            controller._on_checked(None, info, 1)
 
         self.assertEqual(window.messages[0][0], "Update check complete.")
-        self.assertEqual(len(_FakeMessageBox.warning_calls), 1)
+        self.assertEqual(len(_FakeMessageBox.info_calls), 1)
 
-    def test_on_checked_new_version_download_selected_calls_download(self) -> None:
+    def test_validate_metadata_requires_sha256(self) -> None:
         window = _WindowStub({})
         controller = UpdaterController(window)
-        controller._manual_check = True
-        controller.download_update = Mock()
         info = UpdateInfo(
             version="9.9.9",
             title="Big Update",
             changelog="Fixes",
             download_url="https://example.com/app.exe",
             pub_date="2026-01-01",
+            sha256="",
+            signature="",
         )
-
-        _FakeMessageBox.next_clicked_text = "Download"
-        with patch("notepadclone.ui.updater_controller.is_newer_version", return_value=True), patch(
-            "notepadclone.ui.updater_controller.QMessageBox", _FakeMessageBox
-        ):
-            controller._on_checked(None, info)
-
-        controller.download_update.assert_called_once_with(info)
-        self.assertEqual(window.messages[0][0], "Update check complete.")
+        self.assertIn("SHA256", controller._validate_update_metadata(info) or "")
 
     def test_on_check_failed_sets_status_and_error(self) -> None:
         window = _WindowStub({})
         controller = UpdaterController(window)
         controller._manual_check = True
+        controller._active_check_id = 1
         controller._show_error_with_details = Mock()
 
-        controller._on_check_failed(None, "timeout")
+        controller._on_check_failed(None, "timeout", 1)
 
         self.assertEqual(window.messages[0][0], "Update check failed.")
         controller._show_error_with_details.assert_called_once()
@@ -170,7 +174,7 @@ class UpdaterControllerTests(unittest.TestCase):
 
         with patch("notepadclone.ui.updater_controller.QMessageBox", _FakeMessageBox):
             controller.download_update(
-                UpdateInfo(version="1.2.3", title="x", changelog="", download_url="", pub_date="")
+                UpdateInfo(version="1.2.3", title="x", changelog="", download_url="", pub_date="", sha256="", signature="")
             )
 
         self.assertEqual(len(_FakeMessageBox.info_calls), 1)

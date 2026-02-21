@@ -33,6 +33,8 @@ Name: "ctx_openwith"; Description: "Add 'Open with Notepad Clone' to file contex
 
 [Files]
 Source: "..\dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+; Bundle example plugins so users get plugin templates immediately.
+Source: "..\plugins\*"; DestDir: "{userappdata}\notepadclone\plugins"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "__pycache__\*"
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

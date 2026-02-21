@@ -6,6 +6,15 @@ The format is based on Keep a Changelog, and this project uses Semantic Versioni
 
 ## [Unreleased]
 
+## [1.6.12-prerelease] - 2026-02-21
+
+### Fixed
+- Fixed UI freezing when non-English language translation was triggered during app startup or when changing language from Settings.
+
+### Changed
+- Translation flow is now non-blocking: cache miss translations are queued in a background worker instead of running network translation on the UI thread.
+- Language application now remains responsive even with large action/widget translation passes.
+
 ## [1.6.11-prerelease] - 2026-02-19
 
 ### Changes

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from fnmatch import fnmatch
 
 
 @dataclass(frozen=True)
@@ -15,6 +16,10 @@ def collect_workspace_files(
     root: str,
     allowed_suffixes: set[str] | None = None,
     max_files: int = 3000,
+    include_hidden: bool = False,
+    follow_symlinks: bool = False,
+    include_globs: list[str] | None = None,
+    exclude_globs: list[str] | None = None,
 ) -> list[str]:
     if not root:
         return []
@@ -26,13 +31,31 @@ def collect_workspace_files(
     for path in base.rglob("*"):
         if not path.is_file():
             continue
+        if path.is_symlink() and not follow_symlinks:
+            continue
+        if not include_hidden and _is_hidden_path(path):
+            continue
         if path.suffix.lower() not in suffixes:
+            continue
+        normalized = str(path).replace("\\", "/")
+        if include_globs and not any(fnmatch(normalized, pat) for pat in include_globs):
+            continue
+        if exclude_globs and any(fnmatch(normalized, pat) for pat in exclude_globs):
             continue
         files.append(str(path))
         if len(files) >= max_files:
             break
     files.sort()
     return files
+
+
+def _is_hidden_path(path: Path) -> bool:
+    for part in path.parts:
+        if part in {".", ".."}:
+            continue
+        if part.startswith("."):
+            return True
+    return False
 
 
 def search_files_for_query(

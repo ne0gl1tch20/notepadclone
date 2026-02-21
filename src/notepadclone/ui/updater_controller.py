@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import os
+import re
 import socket
 import sys
 import tempfile
@@ -15,7 +17,7 @@ from PySide6.QtCore import QObject, QThread, Signal, Qt, QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox, QProgressDialog
 
 from ..app_settings.defaults import DEFAULT_UPDATE_FEED_URL
-from .updater_helpers import UpdateInfo, is_newer_version, parse_update_feed
+from .updater_helpers import UpdateInfo, is_newer_version, parse_update_feed, verify_metadata_signature
 
 def _read_app_version() -> str:
     app_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[3]))
@@ -138,6 +140,8 @@ class UpdaterController(QObject):
         self._active_check_thread: QThread | None = None
         self._update_available_box: QMessageBox | None = None
         self._pending_download_version: str = ""
+        self._pending_download_sha256: str = ""
+        self._pending_download_signature: str = ""
         self._cleanup_pending_update_capsule()
         pending_state = self._pending_capsule_state_text()
         self._log_update(f"Pending update capsule state: {pending_state}")
@@ -259,10 +263,23 @@ class UpdaterController(QObject):
                 self._log_update("Displayed 'App Is Up To Date' dialog.")
             return
 
+        metadata_error = self._validate_update_metadata(info)
+        if metadata_error:
+            self._log_update(f"Update metadata validation failed: {metadata_error}")
+            if self._manual_check:
+                self._show_error_with_details(
+                    title="Update Metadata Validation Failed",
+                    summary="Update metadata is invalid or untrusted.",
+                    details=metadata_error,
+                )
+            return
+
         self._log_update(f"Update available: current={APP_VERSION} remote={info.version or 'unknown'}")
         details = [f"Current: {APP_VERSION}", f"Latest: {info.version or 'unknown'}"]
         if info.pub_date:
             details.append(f"Published: {info.pub_date}")
+        details.append(f"SHA256: {info.sha256 or 'missing'}")
+        details.append(f"Signature: {'present' if bool(info.signature) else 'missing'}")
         if info.changelog:
             details.append("")
             details.append("Changelog:")
@@ -416,6 +433,8 @@ class UpdaterController(QObject):
 
         destination = self._build_capsule_destination(update.download_url)
         self._pending_download_version = str(update.version or "").strip()
+        self._pending_download_sha256 = str(update.sha256 or "").strip().lower()
+        self._pending_download_signature = str(update.signature or "").strip()
         worker = _UpdateDownloadWorker(update.download_url, destination)
         self._log_update(f"Starting update download: {update.download_url} -> {destination}")
         thread = QThread(self.window)
@@ -436,6 +455,20 @@ class UpdaterController(QObject):
         thread.start()
 
     def _on_download_finished(self, _thread: QThread, path: str) -> None:
+        hash_error = self._verify_download_hash(path, self._pending_download_sha256)
+        if hash_error:
+            self._log_update(f"Downloaded installer failed hash validation: {hash_error}")
+            self.window.show_status_message("Downloaded update failed SHA256 verification.", 5000)
+            self._show_error_with_details(
+                title="Update Integrity Check Failed",
+                summary="The downloaded installer failed SHA256 verification.",
+                details=hash_error,
+            )
+            try:
+                Path(path).unlink(missing_ok=True)
+            except Exception:
+                pass
+            return
         self._log_update(f"Update download finished: {path}")
         self._persist_pending_update_capsule(path, self._pending_download_version)
         self.window.show_status_message(f"Update downloaded: {path}", 4000)
@@ -593,3 +626,37 @@ class UpdaterController(QObject):
         box.setDetailedText(details)
         box.setStandardButtons(QMessageBox.Ok)
         box.exec()
+
+    def _validate_update_metadata(self, info: UpdateInfo) -> str | None:
+        digest = str(info.sha256 or "").strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", digest):
+            return "Feed must provide a valid 64-char SHA256 digest for the installer."
+        signature = str(info.signature or "").strip().lower()
+        require_signed = bool(self.window.settings.get("update_require_signed_metadata", False))
+        if not signature:
+            return "Signed metadata is required but signature is missing." if require_signed else None
+        signing_key = str(self.window.settings.get("update_signing_key", "") or os.getenv("NOTEPAD_UPDATE_SIGNING_KEY", "")).strip()
+        if not signing_key:
+            return "Feed signature is present but signing key is not configured (settings or NOTEPAD_UPDATE_SIGNING_KEY)."
+        if not verify_metadata_signature(info, signing_key):
+            return "Feed signature does not match metadata payload."
+        return None
+
+    def _verify_download_hash(self, path: str, expected_sha256: str) -> str | None:
+        expected = str(expected_sha256 or "").strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", expected):
+            return "Expected SHA256 is missing or malformed."
+        try:
+            hasher = hashlib.sha256()
+            with open(path, "rb") as handle:
+                while True:
+                    chunk = handle.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    hasher.update(chunk)
+            actual = hasher.hexdigest().lower()
+        except Exception as exc:  # noqa: BLE001
+            return f"Could not compute SHA256: {exc}"
+        if actual != expected:
+            return f"Expected SHA256: {expected}\nActual SHA256:   {actual}"
+        return None

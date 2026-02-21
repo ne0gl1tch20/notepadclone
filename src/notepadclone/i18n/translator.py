@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import queue
+import threading
 from pathlib import Path
 from typing import Iterable
 
@@ -43,10 +45,21 @@ class AppTranslator:
         self._cache: dict[str, dict[str, str]] = {}
         self._loaded = False
         self._translator = None
+        self._lock = threading.Lock()
+        self._pending: set[tuple[str, str]] = set()
+        self._queue: queue.Queue[tuple[str, str]] = queue.Queue()
+        self._worker_started = False
 
     def clear_cache(self) -> None:
-        self._cache = {}
-        self._loaded = True
+        with self._lock:
+            self._cache = {}
+            self._loaded = True
+            self._pending.clear()
+            while True:
+                try:
+                    self._queue.get_nowait()
+                except queue.Empty:
+                    break
         try:
             self._cache_path.unlink(missing_ok=True)
         except OSError:
@@ -59,24 +72,22 @@ class AppTranslator:
         if not target or target in {"en", "english"}:
             return text
         self._load_cache()
-        bucket = self._cache.setdefault(target, {})
-        cached = bucket.get(text)
+        with self._lock:
+            bucket = self._cache.setdefault(target, {})
+            cached = bucket.get(text)
         if cached:
             return cached
-        translated = self._translate_remote(text, target)
-        if translated and translated != text:
-            bucket[text] = translated
-            self._save_cache()
-            return translated
+        self._enqueue_translation(text, target)
         return text
 
     def translate_many(self, values: Iterable[str], target_lang: str) -> list[str]:
         return [self.translate(value, target_lang) for value in values]
 
     def _load_cache(self) -> None:
-        if self._loaded:
-            return
-        self._loaded = True
+        with self._lock:
+            if self._loaded:
+                return
+            self._loaded = True
         try:
             if self._cache_path.exists():
                 with open(self._cache_path, "r", encoding="utf-8") as handle:
@@ -88,17 +99,55 @@ class AppTranslator:
                             normalized[str(lang)] = {
                                 str(src): str(dst) for src, dst in mapping.items() if isinstance(src, str)
                             }
-                    self._cache = normalized
+                    with self._lock:
+                        self._cache = normalized
         except Exception:
-            self._cache = {}
+            with self._lock:
+                self._cache = {}
 
     def _save_cache(self) -> None:
         try:
             self._cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._lock:
+                payload = dict(self._cache)
             with open(self._cache_path, "w", encoding="utf-8") as handle:
-                json.dump(self._cache, handle, indent=2, ensure_ascii=False)
+                json.dump(payload, handle, indent=2, ensure_ascii=False)
         except Exception:
             pass
+
+    def _start_worker(self) -> None:
+        with self._lock:
+            if self._worker_started:
+                return
+            self._worker_started = True
+        thread = threading.Thread(target=self._worker_loop, name="app-translator-worker", daemon=True)
+        thread.start()
+
+    def _enqueue_translation(self, text: str, target_lang: str) -> None:
+        key = (target_lang, text)
+        with self._lock:
+            if key in self._pending:
+                return
+            self._pending.add(key)
+        self._start_worker()
+        self._queue.put(key)
+
+    def _worker_loop(self) -> None:
+        while True:
+            target_lang, text = self._queue.get()
+            try:
+                translated = self._translate_remote(text, target_lang)
+                if translated and translated != text:
+                    with self._lock:
+                        bucket = self._cache.setdefault(target_lang, {})
+                        bucket[text] = translated
+                    self._save_cache()
+            except Exception:
+                pass
+            finally:
+                with self._lock:
+                    self._pending.discard((target_lang, text))
+                self._queue.task_done()
 
     def _translate_remote(self, text: str, target_lang: str) -> str:
         try:

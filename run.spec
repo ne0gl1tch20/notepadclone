@@ -10,7 +10,10 @@ a = Analysis(
     ['src\\run.py'],
     pathex=['src'],
     binaries=[],
-    datas=[('assets', 'assets')],
+    datas=[
+        ('assets', 'assets'),
+        ('plugins', 'plugins'),
+    ],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
