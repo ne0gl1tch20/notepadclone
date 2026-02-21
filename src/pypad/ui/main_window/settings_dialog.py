@@ -331,6 +331,8 @@ class SettingsDialog(QDialog):
         self.ai_preview_redacted_prompt_checkbox = self._add_check(ai_layout, idx, "Preview redacted prompt before send")
         self.ai_key_storage_mode_combo = self._add_combo(ai_layout, idx, "AI key storage mode", ["settings", "env_only"])
         self.ai_private_mode_checkbox = self._add_check(ai_layout, idx, "Enable AI private mode (disable AI calls)")
+        self.ai_rewrite_approval_checkbox = self._add_check(ai_layout, idx, "Require approval before applying AI rewrite")
+        self.ai_verbose_logging_checkbox = self._add_check(ai_layout, idx, "Enable AI verbose logging")
         self.ai_cost_rate_spin = QDoubleSpinBox(ai)
         self.ai_cost_rate_spin.setDecimals(6)
         self.ai_cost_rate_spin.setRange(0.0, 10.0)
@@ -595,6 +597,8 @@ class SettingsDialog(QDialog):
         self.ai_preview_redacted_prompt_checkbox.setChecked(bool(s.get("ai_preview_redacted_prompt", True)))
         self.ai_key_storage_mode_combo.setCurrentText(str(s.get("ai_key_storage_mode", "settings")))
         self.ai_private_mode_checkbox.setChecked(bool(s.get("ai_private_mode", False)))
+        self.ai_rewrite_approval_checkbox.setChecked(bool(s.get("ai_rewrite_require_approval", True)))
+        self.ai_verbose_logging_checkbox.setChecked(bool(s.get("ai_verbose_logging", False)))
         self.ai_cost_rate_spin.setValue(float(s.get("ai_estimated_cost_per_1k_tokens", 0.0005) or 0.0005))
 
         self.privacy_lock_checkbox.setChecked(bool(s.get("privacy_lock", False)))
@@ -683,6 +687,8 @@ class SettingsDialog(QDialog):
         s["ai_preview_redacted_prompt"] = self.ai_preview_redacted_prompt_checkbox.isChecked()
         s["ai_key_storage_mode"] = self.ai_key_storage_mode_combo.currentText()
         s["ai_private_mode"] = self.ai_private_mode_checkbox.isChecked()
+        s["ai_rewrite_require_approval"] = self.ai_rewrite_approval_checkbox.isChecked()
+        s["ai_verbose_logging"] = self.ai_verbose_logging_checkbox.isChecked()
         s["ai_estimated_cost_per_1k_tokens"] = float(self.ai_cost_rate_spin.value())
 
         s["privacy_lock"] = self.privacy_lock_checkbox.isChecked()

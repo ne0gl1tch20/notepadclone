@@ -1407,9 +1407,12 @@ class UiSetupMixin:
             if menu is None:
                 continue
             tip = menu_tips[label]
-            menu.setToolTipsVisible(True)
-            menu.menuAction().setToolTip(tip)
-            menu.menuAction().setStatusTip(tip)
+            try:
+                menu.setToolTipsVisible(True)
+                menu.menuAction().setToolTip(tip)
+                menu.menuAction().setStatusTip(tip)
+            except RuntimeError:
+                continue
 
     def update_action_states(self, *_args) -> None:
         if not hasattr(self, "save_action"):
@@ -3719,6 +3722,25 @@ class UiSetupMixin:
         self.help_menu.addSeparator()
         self.help_menu.addAction(self.about_action)
 
+        if hasattr(self, "log_event"):
+            try:
+                for action in menu_bar.actions():
+                    menu = action.menu()
+                    if menu is None:
+                        continue
+                    title = menu.title().replace("&", "").strip() or "Menu"
+                    count = len([a for a in menu.actions() if not a.isSeparator()])
+                    self.log_event("Info", f"[Startup] Menu ready: {title} ({count} actions)")
+                    for sub_action in menu.actions():
+                        sub_menu = sub_action.menu()
+                        if sub_menu is None:
+                            continue
+                        sub_title = sub_menu.title().replace("&", "").strip() or "Submenu"
+                        sub_count = len([a for a in sub_menu.actions() if not a.isSeparator()])
+                        self.log_event("Info", f"[Startup] Submenu ready: {title} > {sub_title} ({sub_count} actions)")
+            except Exception:
+                pass
+
     def create_toolbars(self: Any) -> None:
         main_toolbar = QToolBar("Main", self)
         main_toolbar.setObjectName("mainToolbar")
@@ -3819,6 +3841,11 @@ class UiSetupMixin:
         self.main_toolbar_overflow_button.hide()
         main_toolbar.installEventFilter(self)
         self._schedule_main_toolbar_overflow_update()
+        if hasattr(self, "log_event"):
+            try:
+                self.log_event("Info", f"[Startup] Toolbar ready: Main ({len(main_toolbar.actions())} actions)")
+            except Exception:
+                pass
 
         markdown_toolbar = QToolBar("Markdown", self)
         markdown_toolbar.setObjectName("markdownToolbar")
@@ -3850,6 +3877,11 @@ class UiSetupMixin:
         markdown_toolbar.addAction(self.md_link_action)
         markdown_toolbar.addSeparator()
         markdown_toolbar.addAction(self.md_toggle_preview_action)
+        if hasattr(self, "log_event"):
+            try:
+                self.log_event("Info", f"[Startup] Toolbar ready: Markdown ({len(markdown_toolbar.actions())} actions)")
+            except Exception:
+                pass
 
         self.search_toolbar = QToolBar("Search", self)
         self.search_toolbar.setObjectName("searchToolbar")
@@ -3863,6 +3895,11 @@ class UiSetupMixin:
         self.search_input = QLineEdit(self.search_toolbar)
         self.search_input.setPlaceholderText("Find text...")
         self.search_input.textChanged.connect(self._on_search_text_changed)
+        if hasattr(self, "log_event"):
+            try:
+                self.log_event("Info", f"[Startup] Toolbar ready: Search ({len(self.search_toolbar.actions())} actions)")
+            except Exception:
+                pass
         self.search_toolbar.addWidget(QLabel("Find:", self.search_toolbar))
         self.search_toolbar.addWidget(self.search_input)
 

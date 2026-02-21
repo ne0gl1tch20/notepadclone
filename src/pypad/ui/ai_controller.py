@@ -8,7 +8,7 @@ from collections.abc import Callable, Iterator
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QThread, Qt, Signal
+from PySide6.QtCore import QObject, QThread, Qt, Signal, QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -17,12 +17,13 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QTextEdit,
     QVBoxLayout,
 )
 
-from .ai_edit_preview_dialog import AIEditPreviewDialog
+from .ai_edit_preview_dialog import AIEditPreviewDialog, AIRewritePromptDialog
 
 MISSING_API_KEY_MESSAGE = (
     "I don't have an API key! Do it in Settings > Preferences > AI and Updates > Gemini API Key! "
@@ -293,6 +294,14 @@ class AIController:
         self._active_stream_worker: _AIStreamWorker | None = None
         self._active_stream_thread: QThread | None = None
         self._app_metadata_block = self._build_app_metadata_block()
+        self._ai_request_counter = 0
+
+    def _log_ai(self, message: str) -> None:
+        if not bool(self.window.settings.get("ai_verbose_logging", False)):
+            return
+        logger = getattr(self.window, "log_event", None)
+        if callable(logger):
+            logger("Info", f"[AI] {message}")
 
     def _build_app_metadata_block(self) -> str:
         app_name = str(QApplication.applicationName() or "Pypad").strip() or "Pypad"
@@ -347,6 +356,9 @@ class AIController:
         tokens = self._estimate_tokens(prompt) + self._estimate_tokens(response)
         rate = float(self.window.settings.get("ai_estimated_cost_per_1k_tokens", 0.0005) or 0.0005)
         est_cost = (tokens / 1000.0) * rate
+        self._log_ai(
+            f"metrics action={action!r} model={model!r} tokens={tokens} est_cost=${est_cost:.6f}"
+        )
 
         if hasattr(self.window, "record_ai_usage"):
             self.window.record_ai_usage(tokens=tokens, estimated_cost=est_cost)
@@ -372,7 +384,11 @@ class AIController:
     def _prepare_prompt_for_send(self, prompt: str, action_title: str) -> str | None:
         candidate = prompt.strip()
         if not candidate:
+            self._log_ai(f"prepare prompt skipped (empty) action={action_title!r}")
             return None
+        self._log_ai(
+            f"prepare prompt action={action_title!r} chars={len(candidate)}"
+        )
         app_name = str(QApplication.applicationName() or "Pypad").strip() or "Pypad"
         self.window.settings["ai_last_prompt_app_name"] = app_name
         if hasattr(self.window, "save_settings_to_disk"):
@@ -380,12 +396,20 @@ class AIController:
         candidate = f"{self._app_metadata_block}\n\n{candidate}"
         redacted, changes = sanitize_prompt_text(candidate, self.window.settings)
         if not changes:
+            self._log_ai(
+                f"prompt redaction none action={action_title!r} final_chars={len(redacted)}"
+            )
             return redacted
+        self._log_ai(
+            f"prompt redaction action={action_title!r} changes={','.join(changes)}"
+        )
         if bool(self.window.settings.get("ai_preview_redacted_prompt", True)):
             dialog = AIRedactionPreviewDialog(self.window, action_title, changes, candidate, redacted)
             if dialog.exec() != QDialog.Accepted:
+                self._log_ai(f"redaction preview canceled action={action_title!r}")
                 self.window.show_status_message("AI request canceled by redaction preview.", 3000)
                 return None
+            self._log_ai(f"redaction preview accepted action={action_title!r}")
         return redacted
 
     @staticmethod
@@ -406,26 +430,53 @@ class AIController:
         on_error: Callable[[str], None],
         on_cancel: Callable[[str], None] | None = None,
     ) -> None:
+        self._ai_request_counter += 1
+        request_id = self._ai_request_counter
         if not self._has_internet_connection():
+            self._log_ai(f"stream start blocked (offline) action={action_name!r} id={request_id}")
             on_error("You're offline! Check your connection and try again.")
             return
         prepared_prompt = self._prepare_prompt_for_send(prompt, action_name)
         if not prepared_prompt:
+            self._log_ai(f"stream start canceled (prepare failed) action={action_name!r} id={request_id}")
             return
         api_key = self._api_key()
         model = self._model()
+        self._log_ai(
+            f"stream start action={action_name!r} id={request_id} model={model!r} prompt_chars={len(prepared_prompt)}"
+        )
 
         thread = QThread(self.window)
         worker = _AIStreamWorker(prepared_prompt, api_key, model)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.chunk.connect(on_chunk)
+        worker.chunk.connect(
+            lambda piece: self._log_ai(
+                f"stream chunk action={action_name!r} id={request_id} chars={len(piece)}"
+            )
+        )
         worker.finished.connect(
             lambda text: self._record_ai_metrics(action=action_name, prompt=prepared_prompt, response=text, model=model)
         )
+        worker.finished.connect(
+            lambda text: self._log_ai(
+                f"stream finished action={action_name!r} id={request_id} chars={len(text)}"
+            )
+        )
         worker.finished.connect(on_done)
+        worker.failed.connect(
+            lambda message: self._log_ai(
+                f"stream failed action={action_name!r} id={request_id} error={message!r}"
+            )
+        )
         worker.failed.connect(on_error)
         if on_cancel is not None:
+            worker.cancelled.connect(
+                lambda text: self._log_ai(
+                    f"stream cancelled action={action_name!r} id={request_id} chars={len(text)}"
+                )
+            )
             worker.cancelled.connect(on_cancel)
         worker.finished.connect(thread.quit)
         worker.cancelled.connect(thread.quit)
@@ -455,8 +506,12 @@ class AIController:
         action_name: str = "Generate Text",
         auto_insert: bool = False,
         on_result: Callable[[str], None] | None = None,
+        on_error: Callable[[str], None] | None = None,
     ) -> None:
+        self._ai_request_counter += 1
+        request_id = self._ai_request_counter
         if not self._has_internet_connection():
+            self._log_ai(f"start blocked (offline) action={action_name!r} id={request_id}")
             QMessageBox.information(
                 self.window,
                 action_name,
@@ -465,9 +520,13 @@ class AIController:
             return
         prepared_prompt = self._prepare_prompt_for_send(prompt, action_name)
         if not prepared_prompt:
+            self._log_ai(f"start canceled (prepare failed) action={action_name!r} id={request_id}")
             return
         api_key = self._api_key()
         model = self._model()
+        self._log_ai(
+            f"start action={action_name!r} id={request_id} model={model!r} prompt_chars={len(prepared_prompt)}"
+        )
 
         thread = QThread(self.window)
         worker = _AIWorker(prepared_prompt, api_key, model)
@@ -476,8 +535,26 @@ class AIController:
         worker.finished.connect(
             lambda text: self._record_ai_metrics(action=action_name, prompt=prepared_prompt, response=text, model=model)
         )
+        worker.finished.connect(
+            lambda text: self._log_ai(
+                f"finished action={action_name!r} id={request_id} chars={len(text)}"
+            )
+        )
         worker.finished.connect(lambda text: self._on_result(thread, result_title, text, auto_insert, on_result=on_result))
-        worker.failed.connect(lambda message: self._on_error(thread, message, result_title, model))
+        if on_error is None:
+            worker.failed.connect(
+                lambda message: self._log_ai(
+                    f"failed action={action_name!r} id={request_id} error={message!r}"
+                )
+            )
+            worker.failed.connect(lambda message: self._on_error(thread, message, result_title, model))
+        else:
+            worker.failed.connect(
+                lambda message: self._log_ai(
+                    f"failed action={action_name!r} id={request_id} error={message!r}"
+                )
+            )
+            worker.failed.connect(on_error)
         worker.finished.connect(thread.quit)
         worker.failed.connect(thread.quit)
         thread.finished.connect(worker.deleteLater)
@@ -493,6 +570,7 @@ class AIController:
             self._active_stream_thread = None
             self._active_stream_worker = None
         thread.deleteLater()
+        self._log_ai("generation thread cleaned up")
         self.window.show_status_message("AI generation finished.", 3000)
 
     def _on_result(
@@ -503,6 +581,7 @@ class AIController:
         auto_insert: bool,
         on_result: Callable[[str], None] | None = None,
     ) -> None:
+        self._log_ai(f"result delivered title={title!r} chars={len(text)} auto_insert={auto_insert}")
         if on_result is not None:
             on_result(text)
             return
@@ -512,6 +591,7 @@ class AIController:
         dialog.exec()
 
     def _on_error(self, _thread: QThread, message: str, action_title: str, model: str) -> None:
+        self._log_ai(f"error action={action_title!r} model={model!r} message={message!r}")
         self._show_error_with_details(
             title="Error Generating Text",
             summary=f"Error generating text for '{action_title}'.",
@@ -580,21 +660,77 @@ class AIController:
             "fix_grammar": "Fix grammar and punctuation while preserving tone.",
             "summarize": "Summarize this text into a concise version.",
         }
-        instruction = prompts.get(mode, "Rewrite the text.")
+        dialog = AIRewritePromptDialog(self.window, selected[:800], prompts)
+        try:
+            dialog.mode_combo.setCurrentText(mode)
+        except Exception:
+            pass
+        if dialog.exec() != QDialog.Accepted:
+            return
+        instruction = dialog.instruction() or prompts.get(mode, "Rewrite the text.")
         prompt = f"{instruction}\n\nText:\n{selected}"
 
-        def on_rewrite_result(result: str) -> None:
-            preview = AIEditPreviewDialog(self.window, selected, result, title=f"AI Rewrite Preview ({mode})")
-            if preview.exec() != QDialog.Accepted:
-                return
-            tab.text_edit.replace_selection(preview.final_text)
-            self.window.show_status_message("AI rewrite applied.", 3000)
+        progress = QProgressDialog("AI rewrite in progress...", "Cancel", 0, 0, self.window)
+        progress.setWindowTitle("AI Rewrite")
+        progress.setWindowModality(Qt.NonModal)
+        progress.setCancelButtonText("Cancel")
+        progress.setMinimumDuration(0)
+        progress.show()
+        progress.canceled.connect(self.cancel_active_chat_request)
 
-        self._start_generation(
+        def _run_ui(action: Callable[[], None]) -> None:
+            QTimer.singleShot(0, self.window, action)
+
+        def on_rewrite_result(result: str) -> None:
+            progress.close()
+            progress.deleteLater()
+            requires_approval = bool(self.window.settings.get("ai_rewrite_require_approval", True))
+            if requires_approval:
+                preview = AIEditPreviewDialog(self.window, selected, result, title=f"AI Rewrite Preview ({mode})")
+                if preview.exec() != QDialog.Accepted:
+                    return
+                final_text = preview.final_text
+            else:
+                final_text = result
+            QApplication.clipboard().setText(final_text)
+            tab.text_edit.replace_selection(final_text)
+            self.window.show_status_message("AI rewrite applied (copied to clipboard).", 3000)
+
+        def on_rewrite_error(message: str) -> None:
+            def _apply() -> None:
+                progress.close()
+                progress.deleteLater()
+                model = self._model()
+                self._on_error(self._active_stream_thread, message, f"AI Rewrite ({mode})", model)
+
+            _run_ui(_apply)
+
+        chunks: list[str] = []
+
+        def on_chunk(piece: str) -> None:
+            if piece:
+                chunks.append(piece)
+
+        def on_cancel(partial: str) -> None:
+            def _apply() -> None:
+                progress.close()
+                progress.deleteLater()
+                self.window.show_status_message("AI rewrite canceled.", 3000)
+
+            _run_ui(_apply)
+
+        def on_done(text: str) -> None:
+            if not text and chunks:
+                text = "".join(chunks).strip()
+            _run_ui(lambda: on_rewrite_result(text))
+
+        self._start_stream_generation(
             prompt,
-            f"AI Rewrite ({mode})",
             action_name=f"Rewrite Selection ({mode})",
-            on_result=on_rewrite_result,
+            on_chunk=on_chunk,
+            on_done=on_done,
+            on_error=on_rewrite_error,
+            on_cancel=on_cancel,
         )
 
     def ask_about_context(self) -> None:
@@ -633,6 +769,7 @@ class AIController:
     def cancel_active_chat_request(self) -> bool:
         if self._active_stream_worker is None:
             return False
+        self._log_ai("cancel requested for active stream")
         self._active_stream_worker.cancel()
         self.window.show_status_message("AI generation cancel requested.", 2000)
         return True

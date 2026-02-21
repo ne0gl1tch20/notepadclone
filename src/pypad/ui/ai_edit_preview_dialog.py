@@ -5,12 +5,15 @@ from dataclasses import dataclass
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QPushButton,
     QSplitter,
     QTextEdit,
     QVBoxLayout,
@@ -169,3 +172,61 @@ class AIEditPreviewDialog(QDialog):
     def _accept_with_merge(self) -> None:
         self.final_text = self._merged_text()
         self.accept()
+
+
+class AIRewritePromptDialog(QDialog):
+    def __init__(self, parent, selection_preview: str, mode_prompts: dict[str, str]) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("AI Rewrite")
+        self.resize(720, 520)
+        self._mode_prompts = dict(mode_prompts)
+        self._result_instruction = ""
+
+        root = QVBoxLayout(self)
+        root.addWidget(QLabel("Choose a rewrite instruction:", self))
+
+        row = QHBoxLayout()
+        self.mode_combo = QComboBox(self)
+        self.mode_combo.addItems(list(mode_prompts.keys()))
+        row.addWidget(QLabel("Mode:", self))
+        row.addWidget(self.mode_combo, 1)
+        root.addLayout(row)
+
+        self.instruction_edit = QTextEdit(self)
+        self.instruction_edit.setPlainText(mode_prompts.get(self.mode_combo.currentText(), ""))
+        root.addWidget(self.instruction_edit, 1)
+
+        self.force_plain_checkbox = QCheckBox("Force plain text output (no preface)", self)
+        self.force_plain_checkbox.setChecked(True)
+        root.addWidget(self.force_plain_checkbox)
+
+        root.addWidget(QLabel("Selection preview:", self))
+        preview = QTextEdit(self)
+        preview.setReadOnly(True)
+        preview.setPlainText(selection_preview)
+        root.addWidget(preview, 1)
+
+        buttons = QDialogButtonBox(self)
+        generate_btn = QPushButton("Generate", self)
+        buttons.addButton(generate_btn, QDialogButtonBox.AcceptRole)
+        buttons.addButton(QDialogButtonBox.Cancel)
+        root.addWidget(buttons)
+
+        self.mode_combo.currentTextChanged.connect(self._sync_instruction)
+        generate_btn.clicked.connect(self._accept_with_instruction)
+        buttons.rejected.connect(self.reject)
+
+    def _sync_instruction(self, mode: str) -> None:
+        text = self._mode_prompts.get(mode, "")
+        if text:
+            self.instruction_edit.setPlainText(text)
+
+    def _accept_with_instruction(self) -> None:
+        instruction = self.instruction_edit.toPlainText().strip()
+        if self.force_plain_checkbox.isChecked():
+            instruction = instruction + "\n\nReturn only the rewritten text with no preface or commentary."
+        self._result_instruction = instruction.strip()
+        self.accept()
+
+    def instruction(self) -> str:
+        return self._result_instruction

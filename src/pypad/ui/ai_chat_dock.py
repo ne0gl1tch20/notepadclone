@@ -4,7 +4,7 @@ import re
 import base64
 import socket
 from html import escape as html_escape
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from PySide6.QtCore import QByteArray, Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices, QTextDocument
@@ -175,6 +175,7 @@ class AIChatDock(QDockWidget):
         self.ai_controller = ai_controller
         self._active_reply_bubble: _Bubble | None = None
         self._active_reply_index: int | None = None
+        self._external_on_done: Callable[[str], None] | None = None
         self._history: list[dict[str, str]] = []
         self._icon_cache: dict[tuple[str, str, int], QIcon] = {}
         self._copy_code_icon_data_uri = ""
@@ -448,7 +449,38 @@ class AIChatDock(QDockWidget):
             self._scroll_to_bottom()
             return
         self.input.clear()
+        self._external_on_done = None
         self._add_bubble(prompt, "user", persist=True)
+        self._active_reply_bubble = self._add_bubble("", "assistant")
+        self._active_reply_index = len(self._history)
+        self._history.append({"role": "assistant", "text": ""})
+        self._received_stream_content = False
+        self._start_typing_animation()
+        self._persist_history(save=False)
+        self.send_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
+        self.ai_controller.ask_ai_chat(
+            prompt,
+            on_chunk=self._on_stream_chunk,
+            on_done=self._on_stream_done,
+            on_error=self._on_stream_error,
+            on_cancel=self._on_stream_cancel,
+        )
+
+    def send_prompt(self, *, prompt: str, visible_prompt: str | None = None, on_done=None) -> None:
+        prompt = (prompt or "").strip()
+        if not prompt:
+            return
+        if not self._has_internet_connection():
+            self._add_bubble("You're offline! Check your connection and try again.", "assistant", persist=True)
+            self._scroll_to_bottom()
+            return
+        if visible_prompt is None:
+            visible_prompt = prompt
+        self.input.clear()
+        self._external_on_done = on_done
+        if visible_prompt.strip():
+            self._add_bubble(visible_prompt, "user", persist=True)
         self._active_reply_bubble = self._add_bubble("", "assistant")
         self._active_reply_index = len(self._history)
         self._history.append({"role": "assistant", "text": ""})
@@ -490,10 +522,17 @@ class AIChatDock(QDockWidget):
             self._persist_history(save=False)
         self._scroll_to_bottom()
 
-    def _on_stream_done(self, _full_text: str) -> None:
+    def _on_stream_done(self, full_text: str) -> None:
         self.send_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self._stop_typing_animation(clear=not self._received_stream_content)
+        callback = self._external_on_done
+        self._external_on_done = None
+        if callable(callback):
+            try:
+                callback(full_text)
+            except Exception:
+                pass
         self._active_reply_bubble = None
         self._active_reply_index = None
         self._received_stream_content = False

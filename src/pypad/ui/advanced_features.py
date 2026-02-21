@@ -1109,11 +1109,19 @@ class AdvancedFeaturesController:
         self.minimap_dock.setAllowedAreas(Qt.AllDockWidgetAreas)
         self.minimap_dock.hide()
         window.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.minimap_dock)
+        try:
+            window.log_event("Info", "[Startup] Dock created: Minimap")
+        except Exception:
+            pass
         self.outline_dock = OutlineDock(window, self._jump_line)
         self.outline_dock.setObjectName("outlineDock")
         self.outline_dock.setAllowedAreas(Qt.AllDockWidgetAreas)
         self.outline_dock.hide()
         window.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.outline_dock)
+        try:
+            window.log_event("Info", "[Startup] Dock created: Outline")
+        except Exception:
+            pass
         self.collab = CollaborationServer(window)
         self.backup_timer = QTimer(window)
         self.backup_timer.timeout.connect(self.backup_now)

@@ -6,6 +6,7 @@ import os
 import random
 import sys
 import time
+import traceback
 import webbrowser
 from datetime import datetime
 from pathlib import Path
@@ -102,6 +103,10 @@ class Notepad(UiSetupMixin, FileOpsMixin, EditOpsMixin, ViewOpsMixin, MiscMixin,
         def _mark_startup_stage(name: str) -> None:
             elapsed_ms = int((time.perf_counter() - startup_t0) * 1000)
             startup_stages.append((name, elapsed_ms))
+            try:
+                self.log_event("Info", f"[Startup] {name} at {elapsed_ms}ms")
+            except Exception:
+                pass
 
         app = QApplication.instance()
         if Notepad.system_style_name is None and app is not None:
@@ -169,15 +174,21 @@ class Notepad(UiSetupMixin, FileOpsMixin, EditOpsMixin, ViewOpsMixin, MiscMixin,
 
         # Simple in-memory settings
         self.settings: dict = self._build_default_settings()
+        self.log_event("Info", "[Startup] Default settings created")
         self._easter_egg_running = False
         self.settings_file = self._get_settings_file_path()
         self.load_settings_from_disk()
+        self.log_event("Info", f"[Startup] Settings loaded from: {self.settings_file}")
         self._page_layout_view_enabled = bool(self.settings.get("page_layout_view_enabled", False))
         _mark_startup_stage("settings_loaded")
         self.translator = AppTranslator(self._get_translation_cache_path())
+        self.log_event("Info", "[Startup] Translator initialized")
         self.workspace_controller = WorkspaceController(self)
+        self.log_event("Info", "[Startup] Workspace controller initialized")
         self.security_controller = SecurityController(self)
+        self.log_event("Info", "[Startup] Security controller initialized")
         self.ai_controller = AIController(self)
+        self.log_event("Info", "[Startup] AI controller initialized")
         self.ai_chat_dock = AIChatDock(self, self.ai_controller)
         self.ai_chat_dock.setObjectName("aiChatDock")
         self.ai_chat_dock.setMinimumWidth(320)
@@ -185,10 +196,13 @@ class Notepad(UiSetupMixin, FileOpsMixin, EditOpsMixin, ViewOpsMixin, MiscMixin,
         self.ai_chat_dock.visibilityChanged.connect(self.update_action_states)
         self.ai_chat_dock.hide()
         self.updater_controller = UpdaterController(self)
+        self.log_event("Info", "[Startup] Updater controller initialized")
         self.reminders_store = ReminderStore(self._get_reminders_file_path())
         self.reminders_store.load()
+        self.log_event("Info", "[Startup] Reminders loaded")
         self.autosave_store = AutoSaveStore(self._get_autosave_dir_path())
         self.autosave_store.load()
+        self.log_event("Info", "[Startup] Autosave store loaded")
         self.recovery_state_store = RecoveryStateStore(self._get_autosave_dir_path())
         self.autosave_timer = QTimer(self)
         self.autosave_timer.timeout.connect(self._run_autosave_cycle)
@@ -201,6 +215,7 @@ class Notepad(UiSetupMixin, FileOpsMixin, EditOpsMixin, ViewOpsMixin, MiscMixin,
         # Status bar
         self.status = QStatusBar(self)
         self.setStatusBar(self.status)
+        self.log_event("Info", "[Startup] Status bar initialized")
 
         # Status bar widgets
         self.position_label = QLabel("Ln 1, Col 1", self)
@@ -231,47 +246,66 @@ class Notepad(UiSetupMixin, FileOpsMixin, EditOpsMixin, ViewOpsMixin, MiscMixin,
         self.ai_usage_label = QLabel("AI: 0 req | ~0 tok | ~$0.0000", self)
         self.ai_usage_label.setMargin(3)
         self.status.addPermanentWidget(self.ai_usage_label)
+        self.log_event("Info", "[Startup] Status bar widgets attached")
         self.advanced_features = AdvancedFeaturesController(self)
         _mark_startup_stage("advanced_features_ready")
+        self.log_event("Info", "[Startup] Advanced features ready")
         self.setDockOptions(
             QMainWindow.DockOption.AnimatedDocks
             | QMainWindow.DockOption.AllowTabbedDocks
             | QMainWindow.DockOption.AllowNestedDocks
         )
+        self.log_event("Info", "[Startup] Dock options set")
         if hasattr(self, "_init_layout_docks"):
             self._init_layout_docks()
+            self.log_event("Info", "[Startup] Layout docks initialized")
 
         self.add_new_tab(make_current=True)
         self.update_status_bar()
+        self.log_event("Info", "[Startup] Initial tab created")
 
         self.create_actions()
+        self.log_event("Info", "[Startup] Actions created")
         self._connect_action_debug_tracing()
         self.configure_action_tooltips()
         self.create_menus()
+        self.log_event("Info", "[Startup] Menus created")
         self.configure_menu_tooltips()
         self.create_toolbars()
+        self.log_event("Info", "[Startup] Toolbars created")
         if bool(self.settings.get("simple_mode", False)):
             self.toggle_simple_mode(True)
         self._offer_crash_recovery()
         _mark_startup_stage("ui_ready")
+        self.log_event("Info", "[Startup] UI ready")
 
-        # Apply initial settings
-        self.apply_settings()
-        startup_files, startup_folders = self._collect_startup_items()
-        if startup_files or startup_folders:
-            self._open_startup_items(startup_files, startup_folders)
-        else:
-            self.restore_last_session()
-        self.update_action_states()
-        self.log_event("Info", "Pypad initialized")
-        _mark_startup_stage("session_restored")
-        startup_total_ms = int((time.perf_counter() - startup_t0) * 1000)
-        stage_summary = ", ".join(f"{name}={ms}ms" for name, ms in startup_stages)
-        print(f"[startup] pypad_init_total={startup_total_ms}ms | {stage_summary}")
-        self.log_event("Info", f"Startup timing: total={startup_total_ms}ms; {stage_summary}")
-        if self.settings.get("auto_check_updates", True):
-            QTimer.singleShot(1500, lambda: self.check_for_updates(manual=False))
-        QTimer.singleShot(300, self._maybe_show_welcome_tutorial)
+        # Finish startup before showing the window.
+        def _finish_startup_sequence() -> None:
+            try:
+                self.apply_settings()
+                self.log_event("Info", "[Startup] Settings applied")
+            except Exception as exc:  # noqa: BLE001
+                self.log_event("Error", f"[Startup] apply_settings failed: {exc!r}")
+                traceback_text = traceback.format_exc().strip()
+                self.log_event("Error", traceback_text)
+            startup_files, startup_folders = self._collect_startup_items()
+            if startup_files or startup_folders:
+                self._open_startup_items(startup_files, startup_folders)
+            else:
+                self.restore_last_session()
+            self.log_event("Info", "[Startup] Session restore completed")
+            self.update_action_states()
+            self.log_event("Info", "Pypad initialized")
+            _mark_startup_stage("session_restored")
+            startup_total_ms = int((time.perf_counter() - startup_t0) * 1000)
+            stage_summary = ", ".join(f"{name}={ms}ms" for name, ms in startup_stages)
+            print(f"[startup] pypad_init_total={startup_total_ms}ms | {stage_summary}")
+            self.log_event("Info", f"Startup timing: total={startup_total_ms}ms; {stage_summary}")
+            if self.settings.get("auto_check_updates", True):
+                QTimer.singleShot(1500, lambda: self.check_for_updates(manual=False))
+            QTimer.singleShot(300, self._maybe_show_welcome_tutorial)
+
+        _finish_startup_sequence()
 
         # Lock screen enforcement is triggered from main() after the window is shown.
 

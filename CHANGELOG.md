@@ -6,7 +6,7 @@ The format is based on Keep a Changelog, and this project uses Semantic Versioni
 
 ## [Unreleased]
 
-## [1.7.1-prerelease] - 2026-02-21
+## [1.7.2-prerelease] - 2026-02-21
 
 ### Added
 - Snap Dock actions (left/right/bottom) with shortcuts for fast panel placement.

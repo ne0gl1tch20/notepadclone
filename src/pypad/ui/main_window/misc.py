@@ -2793,10 +2793,13 @@ class MiscMixin:
             numbered.append(f"{idx:04d}: {line}")
         payload = "\n".join(numbered[:1200])
         prompt = (
-            "Answer the question using the file content and include citations like [line:123].\n\n"
-            f"Question:\n{question.strip()}\n\nFile:\n{payload}"
+            "Explain about the file and include citations like [line:123].\n\n"
+            f"File:\n{payload}\n\nUser question:\n{question.strip()}"
         )
-        self.ai_controller._start_generation(prompt, "AI File Answer + Citations", action_name="Ask File with Citations")
+        if hasattr(self, "toggle_ai_chat_panel"):
+            self.toggle_ai_chat_panel(True)
+        if hasattr(self, "ai_chat_dock"):
+            self.ai_chat_dock.send_prompt(prompt=prompt, visible_prompt=question.strip())
 
     def ai_inline_edit_with_preview(self) -> None:
         tab = self.active_tab()
@@ -2849,24 +2852,22 @@ class MiscMixin:
             tab.text_edit.set_modified(True)
             self.show_status_message("AI inline edit applied.", 3000)
 
-        self.ai_controller._start_generation(
-            prompt,
-            "AI Inline Edit",
-            action_name="AI Inline Edit",
-            on_result=_on_result,
-        )
+        if hasattr(self, "toggle_ai_chat_panel"):
+            self.toggle_ai_chat_panel(True)
+        if hasattr(self, "ai_chat_dock"):
+            self.ai_chat_dock.send_prompt(prompt=prompt, visible_prompt=instruction.strip(), on_done=_on_result)
 
     def ai_ask_workspace_with_citations(self) -> None:
         root = self._workspace_root()
         if not root:
             QMessageBox.information(self, "Workspace Q&A", "Set a workspace folder first.")
             return
-        question, ok = QInputDialog.getMultiLineText(self, "Ask Workspace (Citations)", "Question:")
-        if not ok or not question.strip():
-            return
         files = self._workspace_files()
         if not files:
             QMessageBox.information(self, "Workspace Q&A", "No workspace files found.")
+            return
+        question, ok = QInputDialog.getMultiLineText(self, "Ask Workspace (Citations)", "Question:")
+        if not ok or not question.strip():
             return
         snippets = build_workspace_citation_snippets(
             question.strip(),
@@ -2879,11 +2880,10 @@ class MiscMixin:
             QMessageBox.information(self, "Workspace Q&A", "No matching file excerpts found for this question.")
             return
         prompt = build_project_qa_prompt(question.strip(), snippets)
-        self.ai_controller._start_generation(
-            prompt,
-            "AI Workspace Answer + Citations",
-            action_name="Ask Workspace with Citations",
-        )
+        if hasattr(self, "toggle_ai_chat_panel"):
+            self.toggle_ai_chat_panel(True)
+        if hasattr(self, "ai_chat_dock"):
+            self.ai_chat_dock.send_prompt(prompt=prompt, visible_prompt=f"Ask Workspace (Citations): {question.strip()}")
 
     def show_collaboration_presence(self) -> None:
         snapshot = self.advanced_features.collaboration_snapshot()
@@ -3014,7 +3014,16 @@ class MiscMixin:
         self.ai_controller.rewrite_selection(mode)
 
     def ask_ai_about_current_context(self) -> None:
-        self.ai_controller.ask_about_context()
+        tab = self.active_tab()
+        if tab is None:
+            QMessageBox.information(self, "Ask About File", "Open a tab first.")
+            return
+        contents = tab.text_edit.get_text()
+        prompt = f"Explain about the file:\n\n{contents}"
+        if hasattr(self, "toggle_ai_chat_panel"):
+            self.toggle_ai_chat_panel(True)
+        if hasattr(self, "ai_chat_dock"):
+            self.ai_chat_dock.send_prompt(prompt=prompt, visible_prompt="")
 
     def run_ai_prompt_template(self) -> None:
         templates = self._ai_templates()
@@ -3115,18 +3124,30 @@ class MiscMixin:
         if checked:
             self.menuBar().setVisible(True)
             if hasattr(self, "markdown_menu"):
-                self.markdown_menu.menuAction().setVisible(False)
+                try:
+                    self.markdown_menu.menuAction().setVisible(False)
+                except RuntimeError:
+                    pass
             if hasattr(self, "macros_menu"):
-                self.macros_menu.menuAction().setVisible(False)
+                try:
+                    self.macros_menu.menuAction().setVisible(False)
+                except RuntimeError:
+                    pass
             if hasattr(self, "search_toolbar"):
                 self.search_toolbar.hide()
             self.settings["show_find_panel"] = False
             self.settings["show_markdown_toolbar"] = False
         else:
             if hasattr(self, "markdown_menu"):
-                self.markdown_menu.menuAction().setVisible(True)
+                try:
+                    self.markdown_menu.menuAction().setVisible(True)
+                except RuntimeError:
+                    pass
             if hasattr(self, "macros_menu"):
-                self.macros_menu.menuAction().setVisible(True)
+                try:
+                    self.macros_menu.menuAction().setVisible(True)
+                except RuntimeError:
+                    pass
         self._layout_top_toolbars()
         self.save_settings_to_disk()
 
@@ -3165,7 +3186,18 @@ class MiscMixin:
             self.ai_chat_panel_action.blockSignals(False)
 
     def explain_selection_with_ai(self) -> None:
-        self.ai_controller.explain_selection()
+        tab = self.active_tab()
+        if tab is None:
+            return
+        selected = tab.text_edit.selected_text().strip()
+        if not selected:
+            QMessageBox.information(self, "Explain Selection", "Select text first.")
+            return
+        prompt = f"Explain this: {selected}"
+        if hasattr(self, "toggle_ai_chat_panel"):
+            self.toggle_ai_chat_panel(True)
+        if hasattr(self, "ai_chat_dock"):
+            self.ai_chat_dock.send_prompt(prompt=prompt, visible_prompt=prompt)
 
     def generate_text_to_tab_with_ai(self) -> None:
         self.ai_controller.generate_to_tab()
@@ -4891,6 +4923,8 @@ class MiscMixin:
         dock.hide()
         dock.visibilityChanged.connect(lambda _visible: self._sync_layout_panel_actions())
         self._refresh_workspace_dock()
+        if hasattr(self, "log_event"):
+            self.log_event("Info", "[Startup] Dock created: Workspace")
 
     def _refresh_workspace_dock(self) -> None:
         if not hasattr(self, "workspace_dock"):
@@ -4934,6 +4968,8 @@ class MiscMixin:
         dock.hide()
         dock.visibilityChanged.connect(lambda _visible: self._sync_layout_panel_actions())
         self._refresh_search_results_dock()
+        if hasattr(self, "log_event"):
+            self.log_event("Info", "[Startup] Dock created: Search Results")
 
     def _refresh_search_results_dock(self) -> None:
         if not hasattr(self, "search_results_dock"):
@@ -4998,6 +5034,8 @@ class MiscMixin:
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dock)
         dock.hide()
         dock.visibilityChanged.connect(lambda _visible: self._sync_layout_panel_actions())
+        if hasattr(self, "log_event"):
+            self.log_event("Info", "[Startup] Dock created: Status Panel")
 
     def _sync_layout_panel_actions(self) -> None:
         if hasattr(self, "workspace_panel_action") and hasattr(self, "workspace_dock"):

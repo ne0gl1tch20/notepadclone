@@ -1,12 +1,17 @@
 import argparse
+import atexit
+import faulthandler
 import os
 import sys
+import threading
 import traceback
 from pathlib import Path
 from time import perf_counter
 from PySide6.QtWidgets import QApplication, QSplashScreen
 from PySide6.QtGui import QPixmap, QPainter, QFontDatabase, QFont
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QObject, QEvent, Qt, QTimer, qInstallMessageHandler, QtMsgType
+
+_MAIN_WINDOW = None
 
 # --- Handle paths for PyInstaller ---
 APP_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
@@ -84,6 +89,60 @@ def _save_startup_traceback(traceback_text: str) -> None:
     except Exception:
         pass
 
+
+def _startup_log(message: str) -> None:
+    print(message, flush=True)
+    _save_startup_traceback(f"[Startup] {message}")
+
+
+def _install_startup_exception_hooks() -> None:
+    def _handle_exception(exc_type, exc_value, exc_tb) -> None:
+        error_text = "".join(
+            traceback.format_exception(exc_type, exc_value, exc_tb)
+        ).strip()
+        _save_startup_traceback(error_text)
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+    def _handle_thread_exception(args: threading.ExceptHookArgs) -> None:
+        error_text = "".join(
+            traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback)
+        ).strip()
+        _save_startup_traceback(error_text)
+        if args.thread is not None:
+            sys.__excepthook__(args.exc_type, args.exc_value, args.exc_traceback)
+
+    sys.excepthook = _handle_exception
+    threading.excepthook = _handle_thread_exception
+
+    # Capture Qt warnings/critical/fatal messages.
+    def _qt_message_handler(mode, context, message) -> None:
+        if isinstance(mode, QtMsgType):
+            mode_name = mode.name
+        else:
+            mode_name = str(mode)
+        location = ""
+        if context is not None:
+            parts = []
+            if context.file:
+                parts.append(context.file)
+            if context.line:
+                parts.append(str(context.line))
+            if context.function:
+                parts.append(context.function)
+            if parts:
+                location = " (" + ":".join(parts) + ")"
+        _save_startup_traceback(f"[Qt:{mode_name}]{location} {message}")
+    qInstallMessageHandler(_qt_message_handler)
+
+    # Capture low-level crashes (segfaults, aborts) to the same log.
+    try:
+        path = get_crash_logs_file_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as handle:
+            faulthandler.enable(file=handle, all_threads=True)
+    except Exception:
+        pass
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(add_help=True)
     parser.add_argument(
@@ -118,10 +177,13 @@ if __name__ == "__main__":
             sys.exit(1)
         sys.exit(0)
 
+    _install_startup_exception_hooks()
+    atexit.register(lambda: _startup_log("Process exiting (atexit)."))
     startup_started_at = perf_counter()
     startup_reported = [False]
     app = QApplication([sys.argv[0], *qt_args])
-    app.setQuitOnLastWindowClosed(True)  # <-- ensure app quits when main window closes
+    # Closing the main window should terminate the app process.
+    app.setQuitOnLastWindowClosed(True)
 
     # Load splash image
     splash_path = resource_path("assets/splash.png")
@@ -140,8 +202,8 @@ if __name__ == "__main__":
             version = f.read().strip()
     except FileNotFoundError:
         version = "v?.?.?"  # fallback
-    print(f"Pypad, Version: {version}")
-    print("Waiting for main_window to start...")
+    _startup_log(f"Pypad, Version: {version}")
+    _startup_log("Waiting for main_window to start...")
 
     # Load custom font
     font_path = resource_path("assets/splash.ttf")
@@ -180,7 +242,7 @@ if __name__ == "__main__":
             splash.finish(window)
         elapsed_ms = int((perf_counter() - startup_started_at) * 1000)
         elapsed_sec = elapsed_ms / 1000.0
-        print(f"Took {elapsed_ms}ms (or {elapsed_sec:.2f} seconds) to intialize!")
+        _startup_log(f"Took {elapsed_ms}ms (or {elapsed_sec:.2f} seconds) to intialize!")
         app.setProperty("app_started", True)
 
     app.setProperty("startup_ready_callback", mark_app_started)
@@ -198,11 +260,58 @@ if __name__ == "__main__":
         if window is None:
             app.quit()
             return
+        # Keep a strong reference so Qt doesn't destroy the window.
+        global _MAIN_WINDOW
+        _MAIN_WINDOW = window
         mark_app_started(window)
+        try:
+            if window.isMinimized():
+                window.showNormal()
+            window.setWindowState(window.windowState() & ~Qt.WindowState.WindowMinimized)
+            window.setVisible(True)
+            window.show()
+            window.raise_()
+            window.activateWindow()
+        except Exception as exc:
+            _startup_log(f"Warning: failed to raise/activate main window: {exc}")
+
+        # Diagnostics for unexpected exits
+        def _log_quit(reason: str) -> None:
+            _startup_log(f"App quitting ({reason})")
+
+        app.aboutToQuit.connect(lambda: _log_quit("aboutToQuit"))
+        app.lastWindowClosed.connect(lambda: _log_quit("lastWindowClosed"))
 
         # Make sure app exits cleanly when main window closes
+        window.destroyed.connect(lambda: _log_quit("main window destroyed"))
         window.destroyed.connect(app.quit)
+
+        def _check_window_visibility() -> None:
+            try:
+                visible = window.isVisible()
+                minimized = window.isMinimized()
+                _startup_log(
+                    f"[Startup] Window state: visible={visible} minimized={minimized} "
+                    f"active={window.isActiveWindow()}"
+                )
+                if not visible:
+                    _startup_log("Warning: main window not visible after startup.")
+            except Exception as exc:
+                _startup_log(f"Warning: failed to read window state: {exc}")
+
+        QTimer.singleShot(1500, _check_window_visibility)
+
+    class _QuitEventFilter(QObject):
+        def eventFilter(self, obj, event):  # type: ignore[override]
+            if event.type() == QEvent.Type.Quit:
+                _startup_log("Quit event received by QApplication.")
+            return False
+
+    _quit_filter = _QuitEventFilter(app)
+    app.installEventFilter(_quit_filter)
 
     QTimer.singleShot(500, start_main)
 
-    sys.exit(app.exec())
+    exit_code = app.exec()
+    _startup_log(f"Qt event loop exited with code {exit_code}")
+    sys.exit(exit_code)

@@ -145,6 +145,8 @@ def build_default_settings(*, default_style: str, font_family: str, font_size: i
         "ai_action_history": [],
         "ai_chat_history": [],
         "ai_last_prompt_app_name": "Pypad",
+        "ai_rewrite_require_approval": True,
+        "ai_verbose_logging": False,
         "update_feed_url": DEFAULT_UPDATE_FEED_URL,
         "auto_check_updates": True,
         "update_require_signed_metadata": False,
