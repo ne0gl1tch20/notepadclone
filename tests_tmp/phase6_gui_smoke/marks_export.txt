@@ -1,0 +1,6 @@
+Line | Kind | Style | Text
+---- | ---- | ----- | ----
+1 | bookmark |  | keep X
+2 | mark | 3 | skip 222
+3 | bookmark |  | keep 333
+4 | mark | 2 | skip 444

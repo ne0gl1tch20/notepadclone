@@ -1,4 +1,4 @@
-from notepadclone.app import main
+from pypad.app import main
 
 if __name__ == "__main__":
     main()

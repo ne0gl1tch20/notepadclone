@@ -1,17 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <updates>
   <item>
-    <title>Notepad Clone 1.6.12-prerelease</title>
-    <version>1.6.12</version>
+    <title>Notepad Clone 1.7.1-prerelease</title>
+    <version>1.7.1</version>
     <pubDate>2026-02-21</pubDate>
     <description>
-      - Fixed freeze when non-English translation triggers on startup/settings language changes
-      - Translation cache misses now resolve asynchronously in background
-      - Improved language-apply responsiveness on large UI trees
+      - Added snap dock actions with shortcuts (left/right/bottom)
+      - Layout now auto-saves on dock/toolbar moves and visibility changes
+      - Per-tab editor splitter sizes persist by file path
+      - AI chat dock can be placed on left/right/bottom
+      - More features to customize at settings
+      - More changelogs can be shown at changelog.md in the repository.
     </description>
-    <sha256>026e17cc55e94a508cf102c3bc859fb777e65443c47e3b675b54b0b2a5e162b8</sha256>
+    <sha256>0000000000000000000000000000000000000000000000000000000000000000</sha256>
     <enclosure
-      url="https://github.com/ne0gl1tch20/notepadclone/raw/refs/heads/main/dist/installer/NotepadClone-Setup-1.6.12-prerelease.exe"
+      url="https://github.com/ne0gl1tch20/notepadclone/raw/refs/heads/main/dist/installer/NotepadClone-Setup-1.7.1-prerelease.exe"
       type="application/octet-stream" />
   </item>
 </updates>

@@ -19,8 +19,8 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from notepadclone.app import main
-from notepadclone.app_settings import get_crash_logs_file_path
+from pypad.app import main
+from pypad.app_settings import get_crash_logs_file_path
 
 
 def _build_shell_open_command() -> str:
@@ -37,10 +37,10 @@ def _register_windows_shell_menu() -> None:
         raise RuntimeError("Windows shell integration is only supported on Windows.")
     import winreg
 
-    label = "Open with Notepad Clone"
+    label = "Open with Pypad"
     icon_target = Path(sys.executable).resolve()
     command = _build_shell_open_command()
-    key_path = r"Software\Classes\*\shell\Open with Notepad Clone"
+    key_path = r"Software\Classes\*\shell\Open with Pypad"
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path) as key:
         winreg.SetValueEx(key, "", 0, winreg.REG_SZ, label)
         winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, str(icon_target))
@@ -66,7 +66,7 @@ def _unregister_windows_shell_menu() -> None:
         raise RuntimeError("Windows shell integration is only supported on Windows.")
     import winreg
 
-    key_path = r"Software\Classes\*\shell\Open with Notepad Clone"
+    key_path = r"Software\Classes\*\shell\Open with Pypad"
     try:
         _delete_registry_tree(winreg.HKEY_CURRENT_USER, key_path)
     except FileNotFoundError:
@@ -89,12 +89,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--register-shell-menu",
         action="store_true",
-        help="Register 'Open with Notepad Clone' in File Explorer context menu (current user).",
+        help="Register 'Open with Pypad' in File Explorer context menu (current user).",
     )
     parser.add_argument(
         "--unregister-shell-menu",
         action="store_true",
-        help="Remove 'Open with Notepad Clone' from File Explorer context menu (current user).",
+        help="Remove 'Open with Pypad' from File Explorer context menu (current user).",
     )
     parsed_args, qt_args = parser.parse_known_args(sys.argv[1:])
 
@@ -104,7 +104,7 @@ if __name__ == "__main__":
     if parsed_args.register_shell_menu:
         try:
             _register_windows_shell_menu()
-            print("Registered: 'Open with Notepad Clone' in File Explorer context menu.")
+            print("Registered: 'Open with Pypad' in File Explorer context menu.")
         except Exception as exc:
             print(f"Failed to register shell menu: {exc}")
             sys.exit(1)
@@ -112,7 +112,7 @@ if __name__ == "__main__":
     if parsed_args.unregister_shell_menu:
         try:
             _unregister_windows_shell_menu()
-            print("Removed: 'Open with Notepad Clone' from File Explorer context menu.")
+            print("Removed: 'Open with Pypad' from File Explorer context menu.")
         except Exception as exc:
             print(f"Failed to unregister shell menu: {exc}")
             sys.exit(1)
@@ -140,7 +140,7 @@ if __name__ == "__main__":
             version = f.read().strip()
     except FileNotFoundError:
         version = "v?.?.?"  # fallback
-    print(f"Notepad Clone, Version: {version}")
+    print(f"Pypad, Version: {version}")
     print("Waiting for main_window to start...")
 
     # Load custom font

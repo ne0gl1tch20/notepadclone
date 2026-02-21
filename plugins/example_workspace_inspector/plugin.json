@@ -1,0 +1,7 @@
+{
+  "id": "example_workspace_inspector",
+  "name": "Example Workspace Inspector",
+  "version": "1.0.0",
+  "description": "Example plugin that shows workspace index status in a panel and notifies when indexing completes.",
+  "permissions": ["file", "panel", "menu", "hooks", "background"]
+}

@@ -1,0 +1,7 @@
+{
+  "id": "example_word_tools",
+  "name": "Example Word Tools",
+  "version": "1.0.0",
+  "description": "Example plugin that can uppercase current document and optionally call AI.",
+  "permissions": ["file", "ai"]
+}

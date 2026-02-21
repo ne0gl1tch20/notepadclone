@@ -6,6 +6,17 @@ The format is based on Keep a Changelog, and this project uses Semantic Versioni
 
 ## [Unreleased]
 
+## [1.7.1-prerelease] - 2026-02-21
+
+### Added
+- Snap Dock actions (left/right/bottom) with shortcuts for fast panel placement.
+- Live layout persistence for dock moves, toolbar moves/float, and visibility changes.
+- Per-tab editor splitter sizes stored by file path.
+- More settings features are added
+
+### Changed
+- AI chat dock can be placed on left/right/bottom.
+
 ## [1.6.12-prerelease] - 2026-02-21
 
 ### Fixed

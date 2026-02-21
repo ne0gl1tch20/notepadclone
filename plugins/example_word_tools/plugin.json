@@ -2,6 +2,6 @@
   "id": "example_word_tools",
   "name": "Example Word Tools",
   "version": "1.0.0",
-  "description": "Example plugin that can uppercase current document and optionally call AI.",
-  "permissions": ["file", "ai"]
+  "description": "Example plugin that can uppercase current document, update a stats panel, and optionally call AI.",
+  "permissions": ["file", "ai", "menu", "toolbar", "panel", "hooks", "background"]
 }

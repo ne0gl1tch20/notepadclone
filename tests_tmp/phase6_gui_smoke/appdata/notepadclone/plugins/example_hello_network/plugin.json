@@ -1,0 +1,7 @@
+{
+  "id": "example_hello_network",
+  "name": "Example Hello Network",
+  "version": "1.0.0",
+  "description": "Example plugin that demonstrates the network permission guard.",
+  "permissions": ["network"]
+}
