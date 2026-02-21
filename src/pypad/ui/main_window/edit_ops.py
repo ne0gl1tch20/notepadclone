@@ -179,7 +179,7 @@ class EditOpsMixin:
             self.edit_find()
             return
         if not self._do_find(self.last_search_text, backward=False):
-            QMessageBox.information(self, "Notepad", f'Cannot find "{self.last_search_text}".')
+            QMessageBox.information(self, "Pypad", f'Cannot find "{self.last_search_text}".')
 
     def edit_find_previous(self) -> None:
         if hasattr(self, "search_toolbar") and self.search_toolbar.isVisible():
@@ -190,7 +190,7 @@ class EditOpsMixin:
             self.edit_find()
             return
         if not self._do_find(self.last_search_text, backward=True):
-            QMessageBox.information(self, "Notepad", f'Cannot find "{self.last_search_text}".')
+            QMessageBox.information(self, "Pypad", f'Cannot find "{self.last_search_text}".')
 
     def edit_replace(self) -> None:
         from PySide6.QtWidgets import QDialog, QDialogButtonBox, QLabel, QLineEdit, QGridLayout
@@ -244,7 +244,7 @@ class EditOpsMixin:
                 replaced_any = True
 
         if not replaced_any:
-            QMessageBox.information(self, "Notepad", f'Cannot find "{find_text}".')
+            QMessageBox.information(self, "Pypad", f'Cannot find "{find_text}".')
 
     def edit_regex_replace_preview(self) -> None:
         from PySide6.QtWidgets import QDialog, QDialogButtonBox, QLabel, QLineEdit, QGridLayout
@@ -519,7 +519,7 @@ class EditOpsMixin:
     def edit_search_bing(self) -> None:
         text = self.text_edit.selected_text() or (self.last_search_text or "")
         if not text:
-            QMessageBox.information(self, "Notepad", "Please select some text or use Find first.")
+            QMessageBox.information(self, "Pypad", "Please select some text or use Find first.")
             return
         url = f"https://www.bing.com/search?q={quote_plus(text)}"
         webbrowser.open(url)

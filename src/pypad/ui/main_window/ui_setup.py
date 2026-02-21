@@ -1057,7 +1057,7 @@ class UiSetupMixin:
         tab_name = self._tab_display_name(tab)
         ret = QMessageBox.warning(
             cast(QWidget, self),
-            "Notepad",
+            "Pypad",
             f'The text in "{tab_name}" has changed.\n\nDo you want to save the changes?',
             QMessageBox.StandardButton.Save
             | QMessageBox.StandardButton.Discard

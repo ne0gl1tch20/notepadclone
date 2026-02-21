@@ -263,11 +263,11 @@ class Notepad(UiSetupMixin, FileOpsMixin, EditOpsMixin, ViewOpsMixin, MiscMixin,
         else:
             self.restore_last_session()
         self.update_action_states()
-        self.log_event("Info", "Notepad initialized")
+        self.log_event("Info", "Pypad initialized")
         _mark_startup_stage("session_restored")
         startup_total_ms = int((time.perf_counter() - startup_t0) * 1000)
         stage_summary = ", ".join(f"{name}={ms}ms" for name, ms in startup_stages)
-        print(f"[startup] notepad_init_total={startup_total_ms}ms | {stage_summary}")
+        print(f"[startup] pypad_init_total={startup_total_ms}ms | {stage_summary}")
         self.log_event("Info", f"Startup timing: total={startup_total_ms}ms; {stage_summary}")
         if self.settings.get("auto_check_updates", True):
             QTimer.singleShot(1500, lambda: self.check_for_updates(manual=False))
@@ -343,4 +343,3 @@ class Notepad(UiSetupMixin, FileOpsMixin, EditOpsMixin, ViewOpsMixin, MiscMixin,
                     break
         if opened:
             self.log_event("Info", f"Opened on startup: {', '.join(opened)}")
-

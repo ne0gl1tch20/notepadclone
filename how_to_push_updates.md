@@ -1,6 +1,6 @@
 # How To Push Updates (GitHub + Manual XML)
 
-This guide explains how to ship a new Notepad Clone update using:
+This guide explains how to ship a new Pypad update using:
 - GitHub Releases (installer hosting)
 - Manual edit of `notepad.xml` (update feed)
 
@@ -31,7 +31,7 @@ dist\installer\NotepadClone-Setup-<version>.exe
 2. Open your repo on GitHub.
 3. Go to **Releases** -> **Draft a new release**.
 4. Create/select tag for the new version.
-5. Set release title (example: `Notepad Clone 1.6.9-prerelease`).
+5. Set release title (example: `Pypad 1.6.9-prerelease`).
 6. Paste release notes (from `CHANGELOG.md`).
 7. Upload installer EXE (`dist\installer\...exe`) as release asset.
 8. Publish release.
@@ -59,7 +59,7 @@ Template:
 <?xml version="1.0" encoding="UTF-8"?>
 <updates>
   <item>
-    <title>Notepad Clone 1.6.9-prerelease</title>
+    <title>Pypad 1.6.9-prerelease</title>
     <version>1.6.9</version>
     <pubDate>2026-02-18</pubDate>
     <description>
@@ -121,3 +121,4 @@ https://raw.githubusercontent.com/ne0gl1tch20/neogl1tch20server/refs/heads/main/
   - Network/proxy issue to `raw.githubusercontent.com`.
 - Download fails:
   - Release asset URL is wrong or private.
+

@@ -40,11 +40,11 @@ def main() -> None:
         '040904B0',
         [
         StringStruct('CompanyName', 'ne0gl1tch20'),
-        StringStruct('FileDescription', 'Notepad Clone'),
+        StringStruct('FileDescription', 'Pypad'),
         StringStruct('FileVersion', '{filever}'),
-        StringStruct('InternalName', 'notepadclone'),
+        StringStruct('InternalName', 'pypad'),
         StringStruct('OriginalFilename', 'run.exe'),
-        StringStruct('ProductName', 'Notepad Clone'),
+        StringStruct('ProductName', 'Pypad'),
         StringStruct('ProductVersion', '{filever}')
         ])
       ]),

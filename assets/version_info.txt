@@ -16,11 +16,11 @@ VSVersionInfo(
         '040904B0',
         [
         StringStruct('CompanyName', 'ne0gl1tch20'),
-        StringStruct('FileDescription', 'Notepad Clone'),
+        StringStruct('FileDescription', 'Pypad'),
         StringStruct('FileVersion', '1.7.1.0'),
-        StringStruct('InternalName', 'notepadclone'),
+        StringStruct('InternalName', 'pypad'),
         StringStruct('OriginalFilename', 'run.exe'),
-        StringStruct('ProductName', 'Notepad Clone'),
+        StringStruct('ProductName', 'Pypad'),
         StringStruct('ProductVersion', '1.7.1.0')
         ])
       ]),

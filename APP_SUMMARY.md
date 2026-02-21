@@ -1,7 +1,7 @@
-# Notepad Clone - Full App Summary
+# Pypad - Full App Summary
 
 ## 1) Product Summary
-Notepad Clone is a PySide6 desktop text editor with:
+Pypad is a PySide6 desktop text editor with:
 - Multi-tab editing (detachable + reorderable tabs)
 - Markdown tooling and live preview
 - Unified editor widget API with optional advanced backend support
@@ -359,3 +359,4 @@ Covered areas:
 ---
 
 If you want, next step can be a generated "feature matrix by menu item -> method -> settings keys -> tests" table for faster debugging and maintenance.
+

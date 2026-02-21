@@ -373,6 +373,10 @@ class AIController:
         candidate = prompt.strip()
         if not candidate:
             return None
+        app_name = str(QApplication.applicationName() or "Pypad").strip() or "Pypad"
+        self.window.settings["ai_last_prompt_app_name"] = app_name
+        if hasattr(self.window, "save_settings_to_disk"):
+            self.window.save_settings_to_disk()
         candidate = f"{self._app_metadata_block}\n\n{candidate}"
         redacted, changes = sanitize_prompt_text(candidate, self.window.settings)
         if not changes:

@@ -167,7 +167,7 @@ class EditorWidget(QObject):
             return
         cursor = self.widget.textCursor()
         cursor.setPosition(block.position())
-        cursor.movePosition(cursor.EndOfBlock, cursor.KeepAnchor)
+        cursor.movePosition(QTextCursor.EndOfBlock, QTextCursor.KeepAnchor)
         cursor.insertText(text)
 
     def selection_range(self) -> tuple[int, int, int, int] | None:

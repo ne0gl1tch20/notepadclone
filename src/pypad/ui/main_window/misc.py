@@ -4283,11 +4283,11 @@ class MiscMixin:
     def update_window_title(self) -> None:
         tab = self.active_tab()
         if tab is None:
-            self.setWindowTitle("Notepad")
+            self.setWindowTitle("Pypad")
             return
         name = tab.current_file if tab.current_file else "Untitled"
         modified_marker = "*" if tab.text_edit.is_modified() else ""
-        self.setWindowTitle(f"{modified_marker}{name} - Notepad")
+        self.setWindowTitle(f"{modified_marker}{name} - Pypad")
 
     def _on_modification_changed(self, _changed: bool) -> None:
         sender_editor = self.sender()
@@ -4380,7 +4380,7 @@ class MiscMixin:
     def save_session_as(self) -> None:
         default_path = str(self.settings.get("last_session_file_path", "") or "").strip()
         if not default_path:
-            default_path = str(Path.home() / "notepadclone.session.json")
+            default_path = str(Path.home() / "pypad.session.json")
         path, _ = QFileDialog.getSaveFileName(
             self,
             "Save Session As",
@@ -5921,7 +5921,7 @@ Pypad User Guide 📘
         class LockDialog(QDialog):
             def __init__(self, parent=None, want_password: bool = True, want_pin: bool = True) -> None:
                 super().__init__(parent)
-                self.setWindowTitle("Unlock Notepad")
+                self.setWindowTitle("Unlock Pypad")
                 layout = QFormLayout(self)
 
                 self.password_edit: QLineEdit | None = None

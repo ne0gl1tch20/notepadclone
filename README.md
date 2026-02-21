@@ -1,4 +1,4 @@
-# Notepad Clone 📝
+# Pypad 📝
 
 A desktop notes editor built with `PySide6` featuring markdown, reminders, autosave recovery, workspace search, per-note encryption, and AI helpers 🤖.
 
@@ -91,7 +91,7 @@ Update settings:
 
 ## Plugins
 
-Notepad Clone includes a local plugin system with permission-based capabilities.
+Pypad includes a local plugin system with permission-based capabilities.
 
 - Open manager: `Settings -> Plugin Manager...`
 - Plugin docs: `docs/plugins.md`
@@ -126,3 +126,4 @@ Included examples:
 - `src/notepadclone/ui/main_window/settings_dialog.py`: sidebar settings UI
 
 Made with OpenAI ChatGPT Codex Agent. Ideas & Concepts by me. Inspired by one simple notepad app.
+

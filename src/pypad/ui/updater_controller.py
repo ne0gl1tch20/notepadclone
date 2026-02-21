@@ -547,8 +547,8 @@ class UpdaterController(QObject):
             return False
 
     def _build_capsule_destination(self, download_url: str) -> str:
-        filename = Path(download_url.split("?")[0]).name or "notepad-update.bin"
-        capsule_dir = Path(tempfile.gettempdir()) / "notepadclone"
+        filename = Path(download_url.split("?")[0]).name or "pypad-update.bin"
+        capsule_dir = Path(tempfile.gettempdir()) / "pypad"
         capsule_dir.mkdir(parents=True, exist_ok=True)
         base = f"update-capsule-{int(time.time())}-{filename}"
         return str(capsule_dir / base)
@@ -635,9 +635,13 @@ class UpdaterController(QObject):
         require_signed = bool(self.window.settings.get("update_require_signed_metadata", False))
         if not signature:
             return "Signed metadata is required but signature is missing." if require_signed else None
-        signing_key = str(self.window.settings.get("update_signing_key", "") or os.getenv("NOTEPAD_UPDATE_SIGNING_KEY", "")).strip()
+        signing_key = str(
+            self.window.settings.get("update_signing_key", "")
+            or os.getenv("PYPAD_UPDATE_SIGNING_KEY", "")
+            or os.getenv("NOTEPAD_UPDATE_SIGNING_KEY", "")
+        ).strip()
         if not signing_key:
-            return "Feed signature is present but signing key is not configured (settings or NOTEPAD_UPDATE_SIGNING_KEY)."
+            return "Feed signature is present but signing key is not configured (settings or PYPAD_UPDATE_SIGNING_KEY)."
         if not verify_metadata_signature(info, signing_key):
             return "Feed signature does not match metadata payload."
         return None

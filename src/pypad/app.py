@@ -9,7 +9,7 @@ from .ui.main_window import Notepad
 def main(existing_app: Optional[QApplication] = None) -> Notepad:
     # Use existing QApplication if passed (from run.py), otherwise create one
     app = existing_app or QApplication(sys.argv)
-    app.setApplicationName("Notepad")
+    app.setApplicationName("Pypad")
 
     window = Notepad()
 

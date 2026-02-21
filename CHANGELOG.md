@@ -90,7 +90,7 @@ The format is based on Keep a Changelog, and this project uses Semantic Versioni
 - Windows shell integration commands in `run.py`:
   - `--register-shell-menu`
   - `--unregister-shell-menu`
-  - Registers/removes `Open with Notepad Clone` for File Explorer context menu (current user).
+  - Registers/removes `Open with Pypad` for File Explorer context menu (current user).
 - Inno Setup packaging support:
   - `installer/NotepadClone.iss`
   - `build_installer.bat`
@@ -218,3 +218,4 @@ The format is based on Keep a Changelog, and this project uses Semantic Versioni
 
 ### Removed
 - `Generate Text to Tab` action from AI menu/workflow.
+

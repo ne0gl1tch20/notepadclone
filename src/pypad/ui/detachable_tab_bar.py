@@ -4,7 +4,7 @@ from PySide6.QtWidgets import QApplication, QTabBar, QToolButton
 
 class DetachableTabBar(QTabBar):
     detach_requested = Signal(int, QPoint)
-    _tab_mime_type = "application/x-notepad-tab"
+    _tab_mime_type = "application/x-pypad-tab"
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)

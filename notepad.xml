@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <updates>
   <item>
-    <title>Notepad Clone 1.7.1-prerelease</title>
+    <title>Pypad 1.7.1-prerelease</title>
     <version>1.7.1</version>
     <pubDate>2026-02-21</pubDate>
     <description>
@@ -14,7 +14,7 @@
     </description>
     <sha256>0000000000000000000000000000000000000000000000000000000000000000</sha256>
     <enclosure
-      url="https://github.com/ne0gl1tch20/notepadclone/raw/refs/heads/main/dist/installer/NotepadClone-Setup-1.7.1-prerelease.exe"
+      url="https://github.com/ne0gl1tch20/notepadclone/raw/refs/heads/main/dist/installer/Pypad-Setup-1.7.1-prerelease.exe"
       type="application/octet-stream" />
   </item>
 </updates>
