@@ -32,6 +32,7 @@ exe = EXE(
     [],
     name='run',
     debug=False,
+    version='assets\\version_info.txt',
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
