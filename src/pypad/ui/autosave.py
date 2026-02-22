@@ -19,6 +19,9 @@ from PySide6.QtWidgets import (
     QTextEdit,
     QVBoxLayout,
 )
+from ..logging_utils import get_logger
+
+_LOGGER = get_logger(__name__)
 
 
 @dataclass
@@ -36,15 +39,19 @@ class AutoSaveStore:
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.index_path = self.base_dir / "autosave_index.json"
         self.entries: dict[str, AutoSaveEntry] = {}
+        _LOGGER.debug("AutoSaveStore initialized base_dir=%s index=%s", self.base_dir, self.index_path)
 
     def load(self) -> None:
+        _LOGGER.debug("AutoSaveStore.load start index=%s", self.index_path)
         if not self.index_path.exists():
             self.entries = {}
+            _LOGGER.debug("AutoSaveStore.load no index file; entries reset")
             return
         try:
             data = json.loads(self.index_path.read_text(encoding="utf-8"))
         except Exception:
             self.entries = {}
+            _LOGGER.exception("AutoSaveStore.load failed to parse index=%s", self.index_path)
             return
         entries = {}
         for item in data:
@@ -62,6 +69,7 @@ class AutoSaveStore:
             except Exception:
                 continue
         self.entries = entries
+        _LOGGER.debug("AutoSaveStore.load complete entries=%d", len(self.entries))
 
     def save(self) -> None:
         data = [
@@ -75,6 +83,7 @@ class AutoSaveStore:
             for e in self.entries.values()
         ]
         self.index_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        _LOGGER.debug("AutoSaveStore.save wrote index=%s entries=%d", self.index_path, len(data))
 
     def new_id(self) -> str:
         return str(uuid.uuid4())
@@ -91,12 +100,21 @@ class AutoSaveStore:
             title=title,
             saved_at=saved_at,
         )
+        _LOGGER.debug(
+            "AutoSaveStore.upsert id=%s file=%s original=%s title=%s",
+            autosave_id,
+            autosave_path,
+            original_path,
+            title,
+        )
 
     def remove(self, autosave_id: str) -> None:
         self.entries.pop(autosave_id, None)
+        _LOGGER.debug("AutoSaveStore.remove id=%s remaining=%d", autosave_id, len(self.entries))
 
     def prune_older_than_days(self, days: int) -> int:
         days = max(1, int(days))
+        _LOGGER.debug("AutoSaveStore.prune_older_than_days start days=%d entries=%d", days, len(self.entries))
         now = datetime.now()
         removed = 0
         for autosave_id, entry in list(self.entries.items()):
@@ -117,17 +135,27 @@ class AutoSaveStore:
                 pass
             self.entries.pop(autosave_id, None)
             removed += 1
+            _LOGGER.debug("AutoSaveStore.pruned id=%s autosave_path=%s", autosave_id, entry.autosave_path)
+        _LOGGER.debug("AutoSaveStore.prune_older_than_days complete removed=%d remaining=%d", removed, len(self.entries))
         return removed
 
 
 class AutoSaveRecoveryDialog(QDialog):
     def __init__(self, parent, entries: list[AutoSaveEntry]) -> None:
-        super().__init__(parent)
-        # Keep recovery UI owned by the main window without an extra taskbar entry.
+        owner = parent
+        use_top_level = bool(owner is not None and hasattr(owner, "isVisible") and not owner.isVisible())
+        super().__init__(None if use_top_level else owner)
+        # During startup recovery (before main window is shown), use a top-level dialog so Windows shows a taskbar button.
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setWindowModality(Qt.WindowModal)
+        self.setWindowModality(Qt.ApplicationModal if use_top_level else Qt.WindowModal)
         self.setWindowTitle("Recover Unsaved Notes")
         self.resize(960, 540)
+        self._theme_parent = owner
+        if owner is not None and hasattr(owner, "windowIcon"):
+            try:
+                self.setWindowIcon(owner.windowIcon())
+            except Exception:
+                pass
         self._selected_ids: list[str] = []
         self._selected_action: str = "open"
         self._path_by_id = {entry.autosave_id: entry.autosave_path for entry in entries}
@@ -168,6 +196,63 @@ class AutoSaveRecoveryDialog(QDialog):
         self.open_btn.clicked.connect(self._accept_open)
         self.discard_btn.clicked.connect(self._accept_discard)
         self.cancel_btn.clicked.connect(self.reject)
+        self._apply_theme_from_parent()
+
+    def _apply_theme_from_parent(self) -> None:
+        parent = getattr(self, "_theme_parent", None) or self.parentWidget()
+        settings = getattr(parent, "settings", {}) if parent is not None else {}
+        dark = bool(settings.get("dark_mode", False))
+        accent = str(settings.get("accent_color", "#4a90e2") or "#4a90e2")
+        if not accent.startswith("#"):
+            accent = f"#{accent}"
+        if len(accent) not in (4, 7):
+            accent = "#4a90e2"
+        window_bg = "#202124" if dark else "#f5f7fb"
+        panel_bg = "#25272b" if dark else "#ffffff"
+        text_fg = "#e8eaed" if dark else "#111111"
+        border = "#3c4043" if dark else "#c7ccd4"
+        muted = "#9aa0a6" if dark else "#5f6368"
+        selected_bg = accent
+        selected_fg = "#ffffff"
+        btn_bg = "#303134" if dark else "#eef2f8"
+        btn_hover = accent
+        btn_border = border
+        self.setStyleSheet(
+            f"""
+            QDialog {{
+                background: {window_bg};
+                color: {text_fg};
+            }}
+            QLabel {{
+                color: {text_fg};
+            }}
+            QListWidget, QTextEdit {{
+                background: {panel_bg};
+                color: {text_fg};
+                border: 1px solid {border};
+                selection-background-color: {selected_bg};
+                selection-color: {selected_fg};
+            }}
+            QListWidget::item:selected {{
+                background: {selected_bg};
+                color: {selected_fg};
+            }}
+            QPushButton {{
+                background: {btn_bg};
+                color: {text_fg};
+                border: 1px solid {btn_border};
+                padding: 4px 10px;
+            }}
+            QPushButton:hover {{
+                background: {btn_hover};
+                color: #ffffff;
+                border: 1px solid {accent};
+            }}
+            QPushButton:disabled {{
+                color: {muted};
+            }}
+            """
+        )
 
     def _populate(self, entries: list[AutoSaveEntry]) -> None:
         for entry in entries:

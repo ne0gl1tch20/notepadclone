@@ -1,6 +1,7 @@
 # Literally my biggest script ever
 from __future__ import annotations
 import getpass
+import importlib.metadata as importlib_metadata
 import base64
 import hashlib
 import json
@@ -76,6 +77,9 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtPrintSupport import QPrintDialog, QPrintPreviewDialog, QPrinter
+from ...logging_utils import get_logger
+
+_LOGGER = get_logger(__name__)
 
 from ..debug_logs_dialog import DebugLogsDialog
 from ..detachable_tab_bar import DetachableTabBar
@@ -103,10 +107,18 @@ from ..syntax_highlighter import CodeSyntaxHighlighter
 from ..updater_controller import UpdaterController
 from ..version_history import VersionEntry, VersionHistoryDialog
 from ..workspace_controller import WorkspaceController
+from ..dialog_theme import ensure_dialog_theme_filter_installed
 from ..session_recovery import local_history_key
 from ..advanced_text_tools import build_line_refs, export_line_refs_text
 from ..document_fidelity import DocumentFidelityError, export_document_text, render_text_to_html
 from ..extensibility_ops import discover_window_actions
+from .notepadpp_pref_runtime import (
+    apply_notepadpp_runtime_settings,
+    apply_indentation_defaults_to_tab,
+    build_search_internet_url,
+    recent_file_max_entries,
+    recent_file_menu_label,
+)
 from ..ai_collaboration import (
     build_ai_conflict_merge_prompt,
     build_conflict_markers,
@@ -167,7 +179,7 @@ class MiscMixin:
         recent = [p for p in self.settings.get("recent_files", []) if isinstance(p, str) and p]
         recent = [p for p in recent if p != path]
         recent.insert(0, path)
-        self.settings["recent_files"] = recent[:15]
+        self.settings["recent_files"] = recent[: recent_file_max_entries(self.settings)]
         self._refresh_recent_files_menu()
         self._refresh_favorite_files_menu()
 
@@ -305,7 +317,8 @@ class MiscMixin:
                 self.recent_files_menu = None
             return
         for path in files:
-            action = QAction(path, self)
+            action = QAction(recent_file_menu_label(self.settings, path), self)
+            action.setToolTip(path)
             if path in favorites:
                 action.setIcon(self._svg_icon("tab-heart"))
             elif path in pinned:
@@ -975,7 +988,14 @@ class MiscMixin:
         if tab is None:
             return
         tab.favorite = not tab.favorite
-        self._persist_file_metadata_for_tab(tab)
+        if tab.current_file:
+            self._persist_file_metadata_for_tab(tab)
+            self._refresh_recent_files_menu()
+            if hasattr(self, "save_settings_to_disk"):
+                self.save_settings_to_disk()
+        else:
+            # Unsaved tabs can still be marked favorite; they'll be added to Favorite Files after Save As.
+            self._refresh_favorite_files_menu()
         self._refresh_tab_title(tab)
         self.favorite_tab_action.setText("&Unfavorite Tab" if tab.favorite else "&Favorite Tab")
 
@@ -1648,6 +1668,169 @@ class MiscMixin:
 
     def ask_ai(self) -> None:
         self.ai_controller.ask_ai()
+
+    def _open_ai_chat_panel(self) -> bool:
+        if hasattr(self, "toggle_ai_chat_panel"):
+            self.toggle_ai_chat_panel(True)
+        return bool(hasattr(self, "ai_chat_dock") and self.ai_chat_dock is not None)
+
+    def _send_ai_chat_prompt(self, *, prompt: str, visible_prompt: str | None = None, on_done=None) -> bool:
+        if not self._open_ai_chat_panel():
+            return False
+        self.ai_chat_dock.send_prompt(prompt=prompt, visible_prompt=visible_prompt, on_done=on_done)
+        return True
+
+    def _log_ai_feature(self, message: str) -> None:
+        if not bool(self.settings.get("ai_verbose_logging", False)):
+            return
+        logger = getattr(self, "log_event", None)
+        if callable(logger):
+            logger("Info", f"[AI Feature] {message}")
+
+    def _with_ai_chat_dock(self):
+        if not self._open_ai_chat_panel():
+            QMessageBox.information(self, "AI Chat", "AI Chat panel is not available.")
+            return None
+        return getattr(self, "ai_chat_dock", None)
+
+    def _ensure_ai_chat_apply_signal_connected(self) -> None:
+        dock = self._with_ai_chat_dock()
+        if dock is None:
+            return
+        if bool(getattr(self, "_ai_batch_apply_signal_connected", False)):
+            return
+        sig = getattr(dock, "apply_completed", None)
+        if sig is None:
+            return
+        try:
+            sig.connect(self._on_ai_chat_apply_completed)
+            self._ai_batch_apply_signal_connected = True
+            self._log_ai_feature("connected ai_chat_dock.apply_completed signal")
+        except Exception as exc:
+            self._log_ai_feature(f"failed to connect ai_chat_dock.apply_completed signal: {exc!r}")
+
+    def _on_ai_chat_apply_completed(self, kind: str, success: bool, detail: str) -> None:
+        self._log_ai_feature(f"apply_completed signal kind={kind!r} success={success} detail={detail!r}")
+        state = getattr(self, "_ai_batch_refactor_state", None)
+        if not isinstance(state, dict):
+            return
+        if not bool(state.get("active", False)):
+            return
+        kind_s = str(kind or "")
+        if kind_s not in {"set_file", "patch"}:
+            return
+        if not bool(state.get("awaiting_apply", False)):
+            return
+        if not bool(success):
+            if str(detail or "") == "declined":
+                state["active"] = False
+                state["awaiting_apply"] = False
+                self.show_status_message("Batch AI refactor queue canceled after declined apply.", 4500)
+                self._log_ai_feature("batch refactor queue canceled by explicit no/decline")
+            return
+        rows = state.get("rows", [])
+        instruction = str(state.get("instruction", "") or "")
+        idx = int(state.get("index", 0) or 0)
+        if not isinstance(rows, list):
+            return
+        state["awaiting_apply"] = False
+        next_idx = idx + 1
+        if next_idx >= len(rows):
+            self.show_status_message("Batch AI refactor queue finished.", 5000)
+            state["active"] = False
+            self._log_ai_feature("batch refactor queue finished after apply confirmation")
+            return
+        current_path = str(state.get("path", "") or "")
+        ans = QMessageBox.question(
+            self,
+            "Batch Refactor",
+            (
+                f"Applied AI result for:\n{current_path}\n\n"
+                "Continue to the next file in the batch?"
+            ),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if ans == QMessageBox.Yes:
+            self._log_ai_feature(f"batch refactor continuing to index={next_idx}")
+            self._run_batch_refactor_queue(rows, instruction, next_idx)
+            return
+        state["active"] = False
+        self._log_ai_feature("batch refactor paused/stopped by user after apply")
+
+    def ai_attach_current_file_to_chat(self) -> None:
+        dock = self._with_ai_chat_dock()
+        if dock is not None and hasattr(dock, "_attach_current_file_to_chat"):
+            dock._attach_current_file_to_chat()
+
+    def ai_attach_selection_to_chat(self) -> None:
+        dock = self._with_ai_chat_dock()
+        if dock is not None and hasattr(dock, "_attach_selection_to_chat"):
+            dock._attach_selection_to_chat()
+
+    def ai_attach_workspace_search_to_chat(self) -> None:
+        dock = self._with_ai_chat_dock()
+        if dock is not None and hasattr(dock, "_attach_workspace_search_results_to_chat"):
+            dock._attach_workspace_search_results_to_chat()
+
+    @staticmethod
+    def _ai_set_file_command_instructions() -> str:
+        return (
+            "Return a short visible summary first, then emit the hidden full-file replace command outside code fences exactly in this format:\n"
+            "[PYPAD_CMD_SET_FILE_BEGIN]\n"
+            "base64:<UTF-8 full file text encoded in base64>\n"
+            "[PYPAD_CMD_SET_FILE_END]\n"
+            "Then ask: Should I replace your current tab with this result?"
+        )
+
+    def _ai_regression_guard_block(self) -> str:
+        if not bool(self.settings.get("ai_enable_regression_guard_prompts", True)):
+            return ""
+        return (
+            "Regression guard requirements:\n"
+            "- Preserve unrelated code/content exactly.\n"
+            "- Preserve imports/usings unless required by the requested change.\n"
+            "- Preserve existing formatting/style unless the user asked to reformat.\n"
+            "- Return only the requested output format plus hidden command blocks when requested.\n"
+            "- Do not place commentary inside hidden command payloads.\n"
+            "- If the request is ambiguous, ask a clarifying question instead of broad rewrites."
+        )
+
+    def _send_ai_file_replace_request(
+        self,
+        *,
+        action_label: str,
+        user_visible_prompt: str,
+        task_instructions: str,
+        file_text: str,
+        extra_context: str = "",
+        on_done=None,
+    ) -> None:
+        tab = self.active_tab()
+        if tab is None:
+            QMessageBox.information(self, action_label, "Open a tab first.")
+            return
+        if tab.text_edit.is_read_only():
+            QMessageBox.information(self, action_label, "Current tab is read-only.")
+            return
+        file_name = str(tab.current_file or "Untitled")
+        prompt = "\n\n".join(
+            part
+            for part in [
+                "You are editing the current file in PyPad.",
+                "Produce the updated full file contents (not a patch).",
+                self._ai_regression_guard_block(),
+                self._ai_set_file_command_instructions(),
+                f"Action: {action_label}",
+                f"File: {file_name}",
+                extra_context.strip(),
+                f"Task:\n{task_instructions.strip()}",
+                "Current file contents:",
+                file_text,
+            ]
+            if str(part or "").strip()
+        )
+        self._send_ai_chat_prompt(prompt=prompt, visible_prompt=user_visible_prompt, on_done=on_done)
 
     # ---------- Edit extensions ----------
     def edit_insert_datetime_short(self) -> None:
@@ -2417,7 +2600,7 @@ class MiscMixin:
         query = tab.text_edit.selected_text().strip() or self.last_search_text or ""
         if not query:
             return
-        webbrowser.open(f"https://www.bing.com/search?q={quote_plus(query)}")
+        webbrowser.open(build_search_internet_url(self.settings, query))
 
     def edit_toggle_read_only_current(self) -> None:
         tab = self.active_tab()
@@ -2758,14 +2941,14 @@ class MiscMixin:
             f"File: {tab.current_file or 'Untitled'}\n\n"
             + tab.text_edit.get_text()[:20000]
         )
-        self.ai_controller._start_generation(prompt, "AI Commit + Changelog", action_name="Commit/Changelog Draft")
+        self._send_ai_chat_prompt(prompt=prompt, visible_prompt="Generate Commit/Changelog Draft")
 
     def ai_batch_refactor_preview(self) -> None:
         root = self._workspace_root()
         if not root:
             QMessageBox.information(self, "Batch Refactor", "Set a workspace folder first.")
             return
-        files = self._workspace_files()[:30]
+        files = self._workspace_files()[:80]
         if not files:
             QMessageBox.information(self, "Batch Refactor", "No workspace files found.")
             return
@@ -2776,10 +2959,273 @@ class MiscMixin:
         )
         if not ok or not instruction.strip():
             return
-        preview_lines = [f"Instruction: {instruction.strip()}", "", "Planned files:"]
-        for p in files:
-            preview_lines.append(f"- {p}")
-        QMessageBox.information(self, "Batch Refactor Preview", "\n".join(preview_lines[:200]))
+        self._run_batch_ai_refactor_planner(instruction.strip(), files)
+
+    def _run_batch_ai_refactor_planner(self, instruction: str, candidate_files: list[str]) -> None:
+        max_files = int(self.settings.get("ai_batch_refactor_max_selected_files", 20) or 20)
+        self._log_ai_feature(
+            f"batch planner start instruction_chars={len(instruction)} candidate_files={len(candidate_files)} max_files={max_files}"
+        )
+        planner_prompt = (
+            "You are planning a batch refactor across a workspace.\n"
+            "Return a JSON object only (no prose, no code fences) using this schema:\n"
+            "{"
+            "\"files\":[{\"path\":\"...\",\"reason\":\"...\",\"priority\":1}],"
+            "\"global_risks\":[\"...\"],"
+            "\"suggested_order\":[\"...\"]"
+            "}\n"
+            f"Pick at most {max_files} files from the candidate list. Use exact paths from the list.\n"
+            "Prioritize files most relevant to the requested refactor.\n\n"
+            f"Refactor instruction:\n{instruction}\n\n"
+            "Candidate files:\n" + "\n".join(candidate_files[:300])
+        )
+
+        def _on_done(text: str) -> None:
+            plan = self._parse_batch_refactor_plan(text, candidate_files, max_files=max_files)
+            self._log_ai_feature(
+                "batch planner parsed "
+                f"planned_files={len(plan.get('files', [])) if isinstance(plan, dict) else 0}"
+            )
+            if not plan["files"]:
+                QMessageBox.information(
+                    self,
+                    "Batch Refactor Plan",
+                    "AI plan did not contain a valid file list. Try again with a narrower instruction.",
+                )
+                return
+            selected = self._choose_batch_refactor_files_dialog(
+                instruction=instruction,
+                plan=plan,
+                max_files=max_files,
+            )
+            if not selected:
+                self._log_ai_feature("batch planner selection canceled/empty")
+                return
+            self._ensure_ai_chat_apply_signal_connected()
+            self._ai_batch_refactor_state = {
+                "active": True,
+                "awaiting_apply": False,
+                "rows": list(selected),
+                "instruction": instruction,
+                "index": 0,
+                "path": "",
+            }
+            self._log_ai_feature(f"batch refactor queue initialized selected_files={len(selected)}")
+            self._run_batch_refactor_queue(selected, instruction, 0)
+
+        self._send_ai_chat_prompt(
+            prompt=planner_prompt,
+            visible_prompt=f"Batch AI Refactor Plan: {instruction}",
+            on_done=_on_done,
+        )
+
+    @staticmethod
+    def _parse_batch_refactor_plan(raw_text: str, candidate_files: list[str], *, max_files: int) -> dict[str, object]:
+        text = strip_model_fences(raw_text or "").strip()
+        if "```" in (raw_text or ""):
+            m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw_text or "", re.DOTALL | re.IGNORECASE)
+            if m:
+                text = m.group(1).strip()
+        try:
+            data = json.loads(text)
+        except Exception:
+            # Fallback: try extracting the first object block.
+            m = re.search(r"\{[\s\S]*\}", text)
+            if not m:
+                return {"files": [], "global_risks": [], "suggested_order": [], "_parse_error": "no_json_object"}
+            try:
+                data = json.loads(m.group(0))
+            except Exception:
+                return {"files": [], "global_risks": [], "suggested_order": [], "_parse_error": "json_decode_failed"}
+        if not isinstance(data, dict):
+            return {"files": [], "global_risks": [], "suggested_order": [], "_parse_error": "not_object"}
+        candidate_set = {str(p) for p in candidate_files}
+        file_rows: list[dict[str, object]] = []
+        raw_rows = data.get("files", [])
+        if isinstance(raw_rows, list):
+            for row in raw_rows:
+                if not isinstance(row, dict):
+                    continue
+                path = str(row.get("path", "") or "").strip()
+                if path not in candidate_set:
+                    continue
+                reason = str(row.get("reason", "") or "").strip()
+                try:
+                    priority = int(row.get("priority", 999) or 999)
+                except Exception:
+                    priority = 999
+                file_rows.append({"path": path, "reason": reason, "priority": priority})
+        # Dedup preserve order, then sort by priority.
+        seen: set[str] = set()
+        dedup: list[dict[str, object]] = []
+        for row in sorted(file_rows, key=lambda r: (int(r.get("priority", 999)), str(r.get("path", "")))):
+            p = str(row.get("path", ""))
+            if p in seen:
+                continue
+            seen.add(p)
+            dedup.append(row)
+            if len(dedup) >= max_files:
+                break
+        risks = [str(x).strip() for x in data.get("global_risks", [])] if isinstance(data.get("global_risks", []), list) else []
+        order = [str(x).strip() for x in data.get("suggested_order", [])] if isinstance(data.get("suggested_order", []), list) else []
+        return {
+            "files": dedup,
+            "global_risks": [r for r in risks if r][:20],
+            "suggested_order": [o for o in order if o][:100],
+        }
+
+    def _choose_batch_refactor_files_dialog(self, *, instruction: str, plan: dict[str, object], max_files: int) -> list[dict[str, object]]:
+        rows = plan.get("files", [])
+        if not isinstance(rows, list) or not rows:
+            return []
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Batch AI Refactor Plan")
+        dlg.resize(920, 620)
+        layout = QVBoxLayout(dlg)
+        top = QLabel(f"Instruction: {instruction}", dlg)
+        top.setWordWrap(True)
+        layout.addWidget(top)
+        split = QSplitter(Qt.Horizontal, dlg)
+        layout.addWidget(split, 1)
+        list_widget = QListWidget(split)
+        details = QTextEdit(split)
+        details.setReadOnly(True)
+        split.setStretchFactor(0, 1)
+        split.setStretchFactor(1, 2)
+        for i, row in enumerate(rows[:max_files]):
+            if not isinstance(row, dict):
+                continue
+            path = str(row.get("path", "") or "")
+            reason = str(row.get("reason", "") or "")
+            label = f"{Path(path).name} :: {path}"
+            item = QListWidgetItem(label, list_widget)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked)
+            item.setData(Qt.ItemDataRole.UserRole, i)
+            item.setToolTip(reason or path)
+
+        def _refresh_details() -> None:
+            item = list_widget.currentItem()
+            if item is None:
+                details.clear()
+                return
+            idx = item.data(Qt.ItemDataRole.UserRole)
+            if not isinstance(idx, int) or not (0 <= idx < len(rows)):
+                details.clear()
+                return
+            row = rows[idx]
+            if not isinstance(row, dict):
+                details.clear()
+                return
+            path = str(row.get("path", "") or "")
+            reason = str(row.get("reason", "") or "")
+            priority = int(row.get("priority", 999) or 999)
+            file_preview = ""
+            try:
+                file_preview = Path(path).read_text(encoding="utf-8", errors="replace")[:3000]
+            except Exception as exc:
+                file_preview = f"(Could not read file: {exc})"
+            risks = plan.get("global_risks", [])
+            risk_lines = []
+            if isinstance(risks, list):
+                risk_lines = [f"- {str(r)}" for r in risks[:8]]
+            details.setPlainText(
+                f"Path: {path}\nPriority: {priority}\nReason: {reason or '(none)'}\n\n"
+                + ("Global risks:\n" + "\n".join(risk_lines) + "\n\n" if risk_lines else "")
+                + "Preview:\n"
+                + file_preview
+            )
+
+        list_widget.currentItemChanged.connect(lambda _c, _p: _refresh_details())
+        if list_widget.count():
+            list_widget.setCurrentRow(0)
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, Qt.Horizontal, dlg)
+        select_all_btn = btns.addButton("Select All", QDialogButtonBox.ButtonRole.ActionRole)
+        select_none_btn = btns.addButton("Select None", QDialogButtonBox.ButtonRole.ActionRole)
+        layout.addWidget(btns)
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        select_all_btn.clicked.connect(lambda: [list_widget.item(i).setCheckState(Qt.CheckState.Checked) for i in range(list_widget.count())])
+        select_none_btn.clicked.connect(lambda: [list_widget.item(i).setCheckState(Qt.CheckState.Unchecked) for i in range(list_widget.count())])
+        if dlg.exec() != QDialog.Accepted:
+            return []
+        selected: list[dict[str, object]] = []
+        for i in range(list_widget.count()):
+            item = list_widget.item(i)
+            if item.checkState() != Qt.CheckState.Checked:
+                continue
+            idx = item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(idx, int) and 0 <= idx < len(rows) and isinstance(rows[idx], dict):
+                selected.append(dict(rows[idx]))
+        return selected[:max_files]
+
+    def _run_batch_refactor_queue(self, selected_rows: list[dict[str, object]], instruction: str, index: int) -> None:
+        if index >= len(selected_rows):
+            state = getattr(self, "_ai_batch_refactor_state", None)
+            if isinstance(state, dict):
+                state["active"] = False
+                state["awaiting_apply"] = False
+            self.show_status_message("Batch AI refactor queue finished.", 4000)
+            self._log_ai_feature("batch refactor queue reached end")
+            return
+        row = selected_rows[index]
+        path = str(row.get("path", "") or "")
+        reason = str(row.get("reason", "") or "")
+        self._log_ai_feature(f"batch refactor queue send index={index} path={path!r}")
+        state = getattr(self, "_ai_batch_refactor_state", None)
+        if isinstance(state, dict):
+            state.update({"active": True, "awaiting_apply": False, "rows": list(selected_rows), "instruction": instruction, "index": index, "path": path})
+        if not path:
+            self._run_batch_refactor_queue(selected_rows, instruction, index + 1)
+            return
+        try:
+            file_text = Path(path).read_text(encoding="utf-8", errors="replace")
+        except Exception as exc:
+            ans = QMessageBox.question(
+                self,
+                "Batch Refactor",
+                f"Could not read file:\n{path}\n\n{exc}\n\nContinue to next file?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if ans == QMessageBox.Yes:
+                self._run_batch_refactor_queue(selected_rows, instruction, index + 1)
+            else:
+                if isinstance(state, dict):
+                    state["active"] = False
+            return
+        if len(file_text) > 30000:
+            file_text = file_text[:30000]
+        file_name = Path(path).name
+
+        def _after_ai_response(_text: str) -> None:
+            st = getattr(self, "_ai_batch_refactor_state", None)
+            if isinstance(st, dict):
+                st["awaiting_apply"] = True
+                st["index"] = index
+                st["path"] = path
+            self._log_ai_feature(f"batch refactor awaiting apply confirmation path={path!r}")
+            self.show_status_message(
+                f"Batch refactor draft ready for {file_name}. Review and confirm in AI Chat to continue.",
+                5000,
+            )
+
+        self._send_ai_file_replace_request(
+            action_label="Batch AI Refactor",
+            user_visible_prompt=f"Batch Refactor: {file_name}",
+            task_instructions=(
+                f"Apply the batch refactor instruction to this file only.\n\n"
+                f"Global instruction:\n{instruction}\n\n"
+                f"Why this file was selected:\n{reason or '(no reason provided)'}"
+            ),
+            file_text=file_text,
+            extra_context=(
+                f"File path: {path}\n"
+                "Return the entire updated file contents via the hidden set-file command. "
+                "Keep unrelated content unchanged."
+            ),
+            on_done=_after_ai_response,
+        )
 
     def ai_ask_file_with_citations(self) -> None:
         tab = self.active_tab()
@@ -2832,30 +3278,22 @@ class MiscMixin:
         )
         if not ok or not instruction.strip():
             return
-        prompt = (
-            "Apply the instruction to the text and return only the revised text, without commentary.\n\n"
-            f"Instruction:\n{instruction.strip()}\n\n"
-            f"Text:\n{target_text}"
+        self._send_ai_file_replace_request(
+            action_label="AI Inline Edit",
+            user_visible_prompt=f"AI Inline Edit: {instruction.strip()}",
+            task_instructions=(
+                f"Apply the instruction to the target {target_label}. Only change what is necessary.\n\n"
+                f"Instruction:\n{instruction.strip()}\n\n"
+                f"Target text:\n{target_text}"
+            ),
+            file_text=source,
+            extra_context=(
+                f"Target label: {target_label}\n"
+                f"Target start index: {start}\n"
+                f"Target end index: {end}\n"
+                "Return the entire updated file contents."
+            ),
         )
-
-        def _on_result(result: str) -> None:
-            revised = strip_model_fences(result).strip()
-            if not revised:
-                QMessageBox.information(self, "AI Inline Edit", "AI returned an empty result.")
-                return
-            dlg = AIEditPreviewDialog(self, target_text, revised, title="AI Inline Edit Preview")
-            if dlg.exec() != QDialog.Accepted:
-                return
-            latest = tab.text_edit.get_text()
-            tab.text_edit.set_text(latest[:start] + dlg.final_text + latest[end:])
-            tab.text_edit.set_selection_by_index(start, start + len(dlg.final_text))
-            tab.text_edit.set_modified(True)
-            self.show_status_message("AI inline edit applied.", 3000)
-
-        if hasattr(self, "toggle_ai_chat_panel"):
-            self.toggle_ai_chat_panel(True)
-        if hasattr(self, "ai_chat_dock"):
-            self.ai_chat_dock.send_prompt(prompt=prompt, visible_prompt=instruction.strip(), on_done=_on_result)
 
     def ai_ask_workspace_with_citations(self) -> None:
         root = self._workspace_root()
@@ -2932,30 +3370,23 @@ class MiscMixin:
                 _apply_and_optionally_push(dlg.final_text, push=False)
             return
         if choice == "AI Merge Draft (Preview)":
-            prompt = build_ai_conflict_merge_prompt(local_text, shared_text)
-
-            def _on_merge_result(result: str) -> None:
-                merged = strip_model_fences(result).strip()
-                if not merged:
-                    QMessageBox.information(self, "AI Merge Draft", "AI returned an empty merge result.")
-                    return
-                dlg = AIEditPreviewDialog(self, local_text, merged, title="AI Collaboration Merge Preview")
-                if dlg.exec() != QDialog.Accepted:
-                    return
-                push = QMessageBox.question(
-                    self,
-                    "Push Merge to Shared?",
-                    "Apply merged text locally and push to collaboration shared state?",
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.Yes,
-                )
-                _apply_and_optionally_push(dlg.final_text, push=(push == QMessageBox.Yes))
-
-            self.ai_controller._start_generation(
-                prompt,
-                "AI Collaboration Merge",
-                action_name="AI Collaboration Merge",
-                on_result=_on_merge_result,
+            self._send_ai_file_replace_request(
+                action_label="AI Collaboration Merge",
+                user_visible_prompt="AI Collaboration Merge Draft",
+                task_instructions=(
+                    "Merge the local and shared versions into a single clean final file. "
+                    "Preserve user content and avoid conflict markers in the final result."
+                ),
+                file_text=local_text,
+                extra_context=(
+                    "Shared collaboration version contents:\n"
+                    f"{shared_text}\n\n"
+                    "Return the merged result as the full file contents via the hidden set-file command."
+                ),
+            )
+            self.show_status_message(
+                "AI merge draft sent to AI Chat. Confirm in chat to apply; push-to-shared can be done afterward.",
+                5000,
             )
 
     def record_ai_usage(self, *, tokens: int, estimated_cost: float) -> None:
@@ -2993,6 +3424,86 @@ class MiscMixin:
                 merged[key.strip()] = value
         return merged
 
+    def _render_ai_template(self, template: str, tab) -> str:
+        text = tab.text_edit.get_text()
+        selection = tab.text_edit.selected_text() or text[:5000]
+        file_name = str(tab.current_file or "Untitled")
+        workspace_root = str(self.settings.get("workspace_root", "") or "")
+        line, col = (0, 0)
+        try:
+            line, col = tab.text_edit.cursor_position()
+        except Exception:
+            pass
+        radius = int(self.settings.get("ai_template_nearby_lines_radius", 20) or 20)
+        all_lines = text.splitlines()
+        start = max(0, line - radius)
+        end = min(len(all_lines), line + radius + 1)
+        nearby = "\n".join(f"{idx + 1:04d}: {all_lines[idx]}" for idx in range(start, end))
+        language = Path(file_name).suffix.lstrip(".").lower() if "." in Path(file_name).name else ""
+        return (
+            str(template or "")
+            .replace("{selection}", selection)
+            .replace("{file_text}", text[:20000])
+            .replace("{file_name}", file_name)
+            .replace("{workspace_root}", workspace_root)
+            .replace("{cursor_line}", str(line + 1))
+            .replace("{cursor_col}", str(col + 1))
+            .replace("{nearby_lines}", nearby)
+            .replace("{language}", language)
+        )
+
+    def ai_review_current_file_with_citations(self) -> None:
+        tab = self.active_tab()
+        if tab is None:
+            QMessageBox.information(self, "AI Code Review", "Open a tab first.")
+            return
+        numbered = [f"{idx:04d}: {line}" for idx, line in enumerate(tab.text_edit.get_text().splitlines(), start=1)]
+        prompt = (
+            "Review this file for bugs, regressions, and risks.\n"
+            "Return findings first. For each finding include severity (High/Medium/Low) and a citation like [line:123].\n"
+            "If evidence is insufficient, say what is missing.\n\n"
+            f"FILE: {tab.current_file or 'Untitled'}\n\n"
+            + "\n".join(numbered[:1500])
+        )
+        self._send_ai_chat_prompt(prompt=prompt, visible_prompt="Review Current File (Citations)")
+
+    def ai_review_workspace_snippets_with_citations(self) -> None:
+        root = self._workspace_root()
+        if not root:
+            QMessageBox.information(self, "Workspace Code Review", "Set a workspace folder first.")
+            return
+        files = self._workspace_files()
+        if not files:
+            QMessageBox.information(self, "Workspace Code Review", "No workspace files found.")
+            return
+        focus, ok = QInputDialog.getMultiLineText(
+            self,
+            "Review Workspace Snippets (Citations)",
+            "Focus / area to review (optional):",
+            "bugs regressions risky patterns",
+        )
+        if not ok:
+            return
+        focus = (focus or "").strip() or "bugs regressions risky patterns"
+        snippets = build_workspace_citation_snippets(
+            focus,
+            files,
+            max_files=int(self.settings.get("ai_workspace_qa_max_files", 10) or 10),
+            max_lines_per_file=int(self.settings.get("ai_workspace_qa_max_lines_per_file", 60) or 60),
+            max_total_chars=30000,
+        )
+        if not snippets:
+            QMessageBox.information(self, "Workspace Code Review", "No matching excerpts found.")
+            return
+        prompt = (
+            "Review the provided workspace excerpts for bugs, regressions, and risks.\n"
+            "Return findings first. Include severity and evidence citations in the form [file:<path>#line:<line>].\n"
+            "If evidence is insufficient, say what is missing.\n\n"
+            f"FOCUS:\n{focus}\n\n"
+            + "\n\n".join(f"FILE: {s.path}\n{s.excerpt}" for s in snippets)
+        )
+        self._send_ai_chat_prompt(prompt=prompt, visible_prompt="Review Workspace Snippets (Citations)")
+
     def open_command_palette(self) -> None:
         actions: list[PaletteItem] = []
         for entry in discover_window_actions(self):
@@ -3011,7 +3522,40 @@ class MiscMixin:
         dialog.selected_action.trigger()
 
     def ai_rewrite_selection(self, mode: str) -> None:
-        self.ai_controller.rewrite_selection(mode)
+        tab = self.active_tab()
+        if tab is None or tab.text_edit.is_read_only():
+            return
+        selected = (tab.text_edit.selected_text() or "").strip()
+        if not selected:
+            QMessageBox.information(self, "AI Rewrite", "Select text first.")
+            return
+        prompts = {
+            "shorten": "Rewrite the selected text to be concise while preserving meaning.",
+            "formal": "Rewrite the selected text in a formal professional tone.",
+            "fix_grammar": "Fix grammar and punctuation in the selected text while preserving tone.",
+            "summarize": "Summarize the selected text into a concise version.",
+        }
+        instruction = prompts.get(mode, "Rewrite the selected text.")
+        source = tab.text_edit.get_text()
+        sel = tab.text_edit.selection_range()
+        if not sel:
+            QMessageBox.information(self, "AI Rewrite", "Could not read the selection range.")
+            return
+        start = tab.text_edit.index_from_line_col(sel[0], sel[1])
+        end = tab.text_edit.index_from_line_col(sel[2], sel[3])
+        target_text = source[start:end]
+        self._send_ai_file_replace_request(
+            action_label=f"AI Rewrite ({mode})",
+            user_visible_prompt=f"Rewrite Selection ({mode})",
+            task_instructions=f"{instruction}\n\nSelected text:\n{target_text}",
+            file_text=source,
+            extra_context=(
+                f"Rewrite mode: {mode}\n"
+                f"Selection start index: {start}\n"
+                f"Selection end index: {end}\n"
+                "Only rewrite the selected text and preserve the rest exactly. Return the entire updated file contents."
+            ),
+        )
 
     def ask_ai_about_current_context(self) -> None:
         tab = self.active_tab()
@@ -3020,10 +3564,7 @@ class MiscMixin:
             return
         contents = tab.text_edit.get_text()
         prompt = f"Explain about the file:\n\n{contents}"
-        if hasattr(self, "toggle_ai_chat_panel"):
-            self.toggle_ai_chat_panel(True)
-        if hasattr(self, "ai_chat_dock"):
-            self.ai_chat_dock.send_prompt(prompt=prompt, visible_prompt="")
+        self._send_ai_chat_prompt(prompt=prompt, visible_prompt="")
 
     def run_ai_prompt_template(self) -> None:
         templates = self._ai_templates()
@@ -3039,14 +3580,8 @@ class MiscMixin:
         if tab is None:
             QMessageBox.information(self, "AI Templates", "Open a tab first.")
             return
-        text = tab.text_edit.get_text()
-        selection = tab.text_edit.selected_text() or text[:5000]
-        rendered = (
-            template.replace("{selection}", selection)
-            .replace("{file_text}", text[:20000])
-            .replace("{file_name}", tab.current_file or "Untitled")
-        )
-        self.ai_controller._start_generation(rendered, f"Template: {name}", action_name=f"Template: {name}")
+        rendered = self._render_ai_template(template, tab)
+        self._send_ai_chat_prompt(prompt=rendered, visible_prompt=f"Template: {name}")
 
     def save_ai_prompt_template(self) -> None:
         name, ok = QInputDialog.getText(self, "Save AI Template", "Template name:")
@@ -3200,7 +3735,25 @@ class MiscMixin:
             self.ai_chat_dock.send_prompt(prompt=prompt, visible_prompt=prompt)
 
     def generate_text_to_tab_with_ai(self) -> None:
-        self.ai_controller.generate_to_tab()
+        tab = self.active_tab()
+        if tab is None:
+            QMessageBox.information(self, "Generate Text", "Open a tab first.")
+            return
+        if tab.text_edit.is_read_only():
+            QMessageBox.information(self, "Generate Text", "Current tab is read-only.")
+            return
+        user_request, ok = QInputDialog.getMultiLineText(self, "Generate Text", "Prompt:")
+        if not ok or not user_request.strip():
+            return
+        self._send_ai_file_replace_request(
+            action_label="Generate Text",
+            user_visible_prompt=user_request.strip(),
+            task_instructions=(
+                "Generate or revise the document to satisfy the user's request and return the complete final file contents.\n\n"
+                f"User request:\n{user_request.strip()}"
+            ),
+            file_text=tab.text_edit.get_text(),
+        )
 
     def check_for_updates(self, manual: bool = True) -> None:
         self.updater_controller.check_for_updates(manual=manual)
@@ -3514,21 +4067,31 @@ class MiscMixin:
 
     def load_settings_from_disk(self) -> None:
         path = self.settings_file
+        _LOGGER.debug("Loading settings from %s", path)
         if not path.exists():
             legacy_path = self._get_legacy_settings_file_path()
             if legacy_path.exists():
                 path = legacy_path
+                _LOGGER.info("Using legacy settings file: %s", legacy_path)
         if not path.exists():
+            _LOGGER.info("No settings file found; using defaults")
             return
         try:
             loaded = json.loads(path.read_bytes().decode("utf-8"))
         except Exception:
+            _LOGGER.exception("Failed to read settings from %s", path)
             return
         if not isinstance(loaded, dict):
+            _LOGGER.warning("Settings file did not contain a JSON object: %s", path)
             return
         self.settings.update(loaded)
         self.settings = migrate_settings(self.settings)
         normalize_ui_visibility_settings(self.settings)
+        if hasattr(self, "apply_logging_preferences"):
+            try:
+                self.apply_logging_preferences()
+            except Exception:
+                _LOGGER.exception("Failed to apply logging preferences after settings load")
         if str(self.settings.get("app_style", "")).strip() in {"", "System Default"}:
             self.settings["app_style"] = self._default_style_name()
         password_data = self._load_password_data_from_disk()
@@ -3540,6 +4103,7 @@ class MiscMixin:
             from_bin = self._unprotect_settings_secret(str(password_data.get("lock_pin_enc", "")))
             from_legacy = self._unprotect_settings_secret(str(loaded.get("lock_pin_enc", "")))
             self.settings["lock_pin"] = from_bin or from_legacy
+        _LOGGER.info("Settings loaded and migrated from %s", path)
 
     def save_settings_to_disk(self) -> None:
         path = self.settings_file
@@ -3547,6 +4111,8 @@ class MiscMixin:
             path.parent.mkdir(parents=True, exist_ok=True)
             payload = migrate_settings(dict(self.settings))
             self.settings = dict(payload)
+            if hasattr(self, "apply_logging_preferences"):
+                self.apply_logging_preferences()
             lock_password = str(payload.get("lock_password", "") or "")
             lock_pin = str(payload.get("lock_pin", "") or "")
             self._save_password_data_to_disk(lock_password, lock_pin)
@@ -3557,7 +4123,9 @@ class MiscMixin:
             payload.pop("lock_pin_enc", None)
             payload.pop("focus_mode_enabled", None)
             path.write_bytes(json.dumps(payload, indent=2).encode("utf-8"))
+            _LOGGER.info("Settings saved to %s", path)
         except Exception:
+            _LOGGER.exception("Failed to save settings to %s", path)
             pass
 
     def _load_password_data_from_disk(self) -> dict:
@@ -3597,10 +4165,14 @@ class MiscMixin:
 
     def apply_settings(self) -> None:
         self.settings = migrate_settings(dict(self.settings))
+        if hasattr(self, "apply_logging_preferences"):
+            self.apply_logging_preferences()
+        _LOGGER.debug("Applying runtime settings (logging level=%s)", self.settings.get("logging_level", "INFO"))
         if hasattr(self, "apply_shortcut_settings"):
             self.apply_shortcut_settings()
         app = QApplication.instance()
         if app is not None:
+            ensure_dialog_theme_filter_installed()
             requested_style = str(self.settings.get("app_style", "System Default") or "System Default")
             if requested_style == "System Default":
                 default_name = type(self).system_style_name or ""
@@ -3835,7 +4407,7 @@ class MiscMixin:
                 background: {chrome_bg};
                 color: {text_color};
                 border: 1px solid {scrollbar_border};
-                padding: 6px 26px 6px 10px;
+                padding: 6px 52px 6px 10px;
                 margin-right: 2px;
                 min-height: 22px;
             }}
@@ -3931,7 +4503,10 @@ class MiscMixin:
             self._layout_top_toolbars()
         if hasattr(self, "_restore_layout_from_settings") and not getattr(self, "_layout_restored_once", False):
             self._layout_restored_once = True
-            self._restore_layout_from_settings()
+            if self.isVisible():
+                self._restore_layout_from_settings()
+            else:
+                self._layout_restore_pending_after_show = True
         if hasattr(self, "_apply_layout_lock"):
             self._apply_layout_lock()
         focus_checked = bool(self.focus_mode_action.isChecked()) if hasattr(self, "focus_mode_action") else False
@@ -3980,6 +4555,7 @@ class MiscMixin:
                 tab.show_wrap_symbol = bool(self.settings.get("show_symbol_wrap_symbol", False))
                 if hasattr(self, "_apply_scintilla_modes"):
                     self._apply_scintilla_modes(tab)
+                apply_indentation_defaults_to_tab(self, tab)
         if hasattr(self, "ai_chat_dock") and self.ai_chat_dock is not None:
             self.ai_chat_dock.refresh_theme()
         if bool(self.settings.get("simple_mode", False)):
@@ -3988,9 +4564,12 @@ class MiscMixin:
             self.toggle_simple_mode(False)
         self.setWindowFlag(Qt.WindowStaysOnTopHint, bool(self.settings.get("always_on_top", False)))
         self.setWindowFlag(Qt.Tool, bool(self.settings.get("post_it_mode", False)))
-        self.show()
+        # Re-show only if already visible. Startup window showing is owned by app/run entrypoints.
+        if self.isVisible():
+            self.show()
         self._refresh_ai_usage_label()
         self.apply_language()
+        apply_notepadpp_runtime_settings(self)
 
     def apply_language(self) -> None:
         lang_label = str(self.settings.get("language", "English") or "English")
@@ -4187,7 +4766,11 @@ class MiscMixin:
                 original = widget.property("i18n_original_window_title") or widget.windowTitle()
                 widget.setProperty("i18n_original_window_title", original)
                 widget.setWindowTitle(self._translate_text(str(original), lang_code))
-            if isinstance(widget, (QLabel, QGroupBox, QCheckBox, QPushButton)):
+            if isinstance(widget, QGroupBox):
+                original = widget.property("i18n_original_title") or widget.title()
+                widget.setProperty("i18n_original_title", original)
+                widget.setTitle(self._translate_text(str(original), lang_code))
+            if isinstance(widget, (QLabel, QCheckBox, QPushButton, QRadioButton)):
                 original = widget.property("i18n_original_text") or widget.text()
                 widget.setProperty("i18n_original_text", original)
                 widget.setText(self._translate_text(str(original), lang_code))
@@ -4206,8 +4789,8 @@ class MiscMixin:
                     button.setProperty("i18n_original_text", original)
                     button.setText(self._translate_text(str(original), lang_code))
 
-    def open_settings(self) -> None:
-        dlg = SidebarSettingsDialog(self, self.settings)
+    def open_settings(self, initial_section: str | None = None) -> None:
+        dlg = SidebarSettingsDialog(self, self.settings, initial_section=initial_section)
         self.apply_language()
         if dlg.exec():
             if getattr(dlg, "reset_to_defaults_requested", False):
@@ -5277,6 +5860,54 @@ class MiscMixin:
         if not self.settings.get("layout_active"):
             self.settings["layout_active"] = "Default"
 
+    def _ensure_main_window_on_screen(self) -> None:
+        # Guard against saved layouts restoring the main window off-screen or tiny.
+        try:
+            frame_rect = self.frameGeometry()
+            geo = self.geometry()
+        except Exception:
+            return
+        if not frame_rect.isValid() and not geo.isValid():
+            return
+
+        target_rect = frame_rect if frame_rect.isValid() else geo
+        width = max(int(geo.width()), int(target_rect.width()))
+        height = max(int(geo.height()), int(target_rect.height()))
+
+        needs_reset = width < 240 or height < 180
+        if not needs_reset:
+            app = QApplication.instance()
+            screens = app.screens() if app is not None else []
+            visible_on_any = False
+            for screen in screens:
+                try:
+                    if screen.availableGeometry().intersects(target_rect):
+                        visible_on_any = True
+                        break
+                except Exception:
+                    continue
+            needs_reset = not visible_on_any
+
+        if not needs_reset:
+            return
+
+        app = QApplication.instance()
+        primary = app.primaryScreen() if app is not None else None
+        if primary is not None:
+            avail = primary.availableGeometry()
+            new_w = max(800, min(1200, int(avail.width() * 0.75)))
+            new_h = max(600, min(900, int(avail.height() * 0.75)))
+            self.resize(new_w, new_h)
+            center = avail.center()
+            self.move(center.x() - (self.width() // 2), center.y() - (self.height() // 2))
+        else:
+            self.resize(1000, 700)
+            self.move(100, 100)
+        try:
+            self.log_event("Info", "[Startup] Window geometry reset (off-screen/invalid layout)")
+        except Exception:
+            pass
+
     def _restore_layout_from_settings(self) -> None:
         if getattr(self, "_layout_restore_in_progress", False):
             return
@@ -5297,6 +5928,7 @@ class MiscMixin:
                 self.restoreState(state)
         finally:
             self._layout_restore_in_progress = False
+        self._ensure_main_window_on_screen()
         self._sync_layout_panel_actions()
 
     def save_current_layout(self) -> None:
@@ -5781,6 +6413,63 @@ class MiscMixin:
 
         about_box.exec()
 
+    def show_open_source_licenses(self) -> None:
+        self.log_event("Info", "Opened Open Source Licenses dialog")
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Open Source Licenses")
+        dialog.resize(900, 640)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel("Installed Python libraries and declared license metadata", dialog))
+        output = QTextEdit(dialog)
+        output.setReadOnly(True)
+        output.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
+        layout.addWidget(output, 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.Close, Qt.Horizontal, dialog)
+        buttons.rejected.connect(dialog.reject)
+        buttons.accepted.connect(dialog.accept)
+        copy_btn = QPushButton("Copy", dialog)
+        buttons.addButton(copy_btn, QDialogButtonBox.ActionRole)
+        copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(output.toPlainText()))
+        layout.addWidget(buttons)
+
+        rows: list[tuple[str, str, str]] = []
+        errors: list[str] = []
+        try:
+            for dist in importlib_metadata.distributions():
+                try:
+                    meta = dist.metadata
+                    name = str(meta.get("Name") or dist.metadata.get("Summary") or "").strip()
+                    if not name:
+                        name = str(getattr(dist, "name", "") or "")
+                    version = str(getattr(dist, "version", "") or meta.get("Version") or "").strip()
+                    license_text = str(meta.get("License") or "").strip()
+                    if not license_text:
+                        classifiers = [str(v) for v in meta.get_all("Classifier", []) or []]
+                        license_classifiers = [c for c in classifiers if c.startswith("License :: ")]
+                        license_text = "; ".join(license_classifiers) if license_classifiers else "(not declared)"
+                    rows.append((name or "(unknown)", version or "?", license_text))
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(str(exc))
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "Open Source Licenses", f"Could not load package metadata:\n{exc}")
+            return
+
+        rows.sort(key=lambda item: item[0].lower())
+        lines = [
+            "PyPad - Open Source Licenses (Python libraries)",
+            "",
+            "This list is generated from installed Python package metadata (Name / Version / License).",
+            "License fields depend on package metadata quality and may be empty or classifier-based.",
+            "",
+        ]
+        for name, version, license_text in rows:
+            lines.append(f"- {name} {version}")
+            lines.append(f"  License: {license_text}")
+        if errors:
+            lines.extend(["", f"Metadata parse warnings: {len(errors)}"])
+        output.setPlainText("\n".join(lines))
+        dialog.exec()
+
     def _maybe_show_welcome_tutorial(self) -> None:
         if self.settings.get("welcome_tutorial_seen", False):
             return
@@ -5808,7 +6497,7 @@ Pypad User Guide 📘
 - Favorite Tab marks important files and lists them under File > Favorite Files.
 
 3. Markdown and Code 🧠
-- Use Markdown menu for headings, lists, links, tables.
+- Use Format > Markdown for headings, lists, links, tables.
 - Live Markdown Preview toggles side-by-side preview.
 - Syntax language picker is in status bar.
 

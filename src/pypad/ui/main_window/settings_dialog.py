@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import json
+import re
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt, QTimer
@@ -12,18 +13,23 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
+    QFrame,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QSlider,
     QSpinBox,
     QSplitter,
     QStackedWidget,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
     QColorDialog,
@@ -33,38 +39,96 @@ from PySide6.QtWidgets import (
 from ...app_settings import migrate_settings
 from ...app_settings.defaults import DEFAULT_UPDATE_FEED_URL
 from ...i18n.translator import get_language_display_options
+from ..dialog_theme import (
+    themed_file_dialog_get_existing_directory,
+    themed_file_dialog_get_open_file_name,
+    themed_file_dialog_get_save_file_name,
+)
+from .settings_notepadpp_pages import (
+    build_notepadpp_like_pages,
+    build_npp_dark_mode_embedded_group,
+    collect_notepadpp_like_page_settings,
+    focus_first_invalid_notepadpp_like_input,
+    load_notepadpp_like_page_settings,
+    validate_notepadpp_like_page_inputs,
+)
 
 if TYPE_CHECKING:
     from .window import Notepad
 
 
 class SettingsDialog(QDialog):
-    def __init__(self, parent: "Notepad", settings: dict) -> None:
+    def __init__(self, parent: "Notepad", settings: dict, initial_section: str | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Preferences")
         self.resize(980, 680)
         self._parent_window = parent
         self._settings = migrate_settings(dict(settings))
+        self._initial_section = str(initial_section or "").strip()
         self._search_entries: list[tuple[int, str, QWidget]] = []
         self._nav_base_labels: list[str] = []
+        self._route_index_map: dict[str, int] = {}
         self._highlighted_widgets: list[QWidget] = []
+        self._nav_scopes: list[str] = []
+        self._settings_nav_scope = "all"
+        self._settings_page_content_max_width = 720
+        self._settings_form_label_width = 190
+        self._npp_pref_controls: dict[str, dict] = {}
         self.reset_to_defaults_requested = False
 
         root = QVBoxLayout(self)
         self.settings_search_input = QLineEdit(self)
+        self.settings_search_input.setObjectName("settingsSearchInput")
         self.settings_search_input.setPlaceholderText("Search settings... (theme, tab, AI, autosave)")
         root.addWidget(self.settings_search_input)
+        scope_row = QHBoxLayout()
+        self.scope_all_btn = QPushButton("All", self)
+        self.scope_pypad_btn = QPushButton("PyPad", self)
+        self.scope_npp_btn = QPushButton("N++", self)
+        for idx_btn, btn in enumerate((self.scope_all_btn, self.scope_pypad_btn, self.scope_npp_btn)):
+            btn.setCheckable(True)
+            btn.setObjectName("settingsScopeBtn")
+            btn.setProperty("scopePos", "left" if idx_btn == 0 else "right" if idx_btn == 2 else "mid")
+            scope_row.addWidget(btn)
+        scope_row.addStretch(1)
+        root.addLayout(scope_row)
+        self.scope_all_btn.setChecked(True)
 
         splitter = QSplitter(Qt.Orientation.Horizontal, self)
         root.addWidget(splitter, 1)
 
         self.settings_nav_list = QListWidget(splitter)
-        self.settings_nav_list.setFixedWidth(220)
-        self.settings_pages = QStackedWidget(splitter)
+        self.settings_nav_list.setObjectName("settingsNavList")
+        self.settings_nav_list.setFixedWidth(260)
+        self.settings_nav_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.settings_nav_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.settings_nav_list.setSpacing(2)
+        right_panel = QWidget(splitter)
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        self.settings_header_card = QFrame(right_panel)
+        self.settings_header_card.setObjectName("settingsHeaderCard")
+        header_layout = QVBoxLayout(self.settings_header_card)
+        header_layout.setContentsMargins(12, 10, 12, 10)
+        header_layout.setSpacing(4)
+        self.settings_page_title = QLabel("Preferences", self.settings_header_card)
+        self.settings_page_title.setObjectName("settingsPageTitle")
+        self.settings_page_title.setStyleSheet("font-size: 16px; font-weight: 700;")
+        self.settings_page_desc = QLabel("Customize PyPad and compatibility behavior.", self.settings_header_card)
+        self.settings_page_desc.setObjectName("settingsPageDesc")
+        self.settings_page_desc.setWordWrap(True)
+        self.settings_page_desc.setStyleSheet("color: #888;")
+        header_layout.addWidget(self.settings_page_title)
+        header_layout.addWidget(self.settings_page_desc)
+        right_layout.addWidget(self.settings_header_card)
+        self.settings_pages = QStackedWidget(right_panel)
+        self.settings_pages.setObjectName("settingsPageStack")
+        right_layout.addWidget(self.settings_pages, 1)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
 
         self._build_pages()
+        self._apply_non_stretch_settings_layout()
 
         buttons_row = QHBoxLayout()
         self.restore_defaults_btn = QPushButton("Restore Defaults ♻️", self)
@@ -82,12 +146,17 @@ class SettingsDialog(QDialog):
         buttons_row.addWidget(self.button_box)
         root.addLayout(buttons_row)
 
-        self.settings_nav_list.currentRowChanged.connect(self.settings_pages.setCurrentIndex)
+        self.settings_nav_list.currentRowChanged.connect(self._on_nav_row_changed)
         self.settings_search_input.textChanged.connect(self._apply_search_filter)
+        self.scope_all_btn.clicked.connect(lambda: self._set_nav_scope("all"))
+        self.scope_pypad_btn.clicked.connect(lambda: self._set_nav_scope("pypad"))
+        self.scope_npp_btn.clicked.connect(lambda: self._set_nav_scope("npp"))
         self.settings_nav_list.setCurrentRow(0)
         self._load_controls_from_settings(self._settings)
         self._apply_dialog_theme()
         self.dark_checkbox.toggled.connect(lambda _checked: self._apply_dialog_theme())
+        if self._initial_section:
+            QTimer.singleShot(0, lambda: self.focus_section(self._initial_section))
 
     @staticmethod
     def _normalize_hex(value: str, fallback: str) -> str:
@@ -102,11 +171,159 @@ class SettingsDialog(QDialog):
             return fallback
         return text
 
+    @staticmethod
+    def _normalize_route_key(value: str) -> str:
+        normalized = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower())
+        return normalized.strip("-")
+
     def _add_category(self, name: str, page: QWidget) -> int:
-        idx = self.settings_pages.addWidget(page)
-        self.settings_nav_list.addItem(name)
+        page.setMaximumWidth(int(getattr(self, "_settings_page_content_max_width", 720)))
+        page_policy = page.sizePolicy()
+        page_policy.setHorizontalPolicy(QSizePolicy.Policy.Preferred)
+        page.setSizePolicy(page_policy)
+
+        center_host = QWidget(self.settings_pages)
+        center_layout = QVBoxLayout(center_host)
+        center_layout.setContentsMargins(0, 0, 0, 0)
+        center_layout.setSpacing(0)
+
+        scroll = QScrollArea(center_host)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        center_layout.addWidget(scroll, 1)
+
+        scroll_content = QWidget(scroll)
+        scroll_layout = QVBoxLayout(scroll_content)
+        scroll_layout.setContentsMargins(16, 12, 16, 12)
+        scroll_layout.setSpacing(0)
+        scroll_layout.addWidget(page, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        scroll_layout.addStretch(1)
+        scroll.setWidget(scroll_content)
+
+        idx = self.settings_pages.addWidget(center_host)
+        item = QListWidgetItem(name)
+        item.setToolTip(self._page_description_for_name(name))
+        self.settings_nav_list.addItem(item)
         self._nav_base_labels.append(name)
+        self._nav_scopes.append("npp" if str(name).startswith("N++ •") else "pypad")
+        item.setText(self._format_nav_item_text(idx))
+        self._route_index_map.setdefault(self._normalize_route_key(name), idx)
         return idx
+
+    @staticmethod
+    def _clean_nav_title(name: str) -> str:
+        text = str(name or "").strip()
+        if text.startswith("N++ • "):
+            return text.replace("N++ • ", "", 1)
+        return text
+
+    def _format_nav_item_text(self, idx: int, count: int = 0, *, query_active: bool = False) -> str:
+        if idx < 0 or idx >= len(self._nav_base_labels):
+            return ""
+        base = self._nav_base_labels[idx]
+        suffix = f" ({count})" if query_active and count > 0 else ""
+        scope = self._nav_scopes[idx] if idx < len(self._nav_scopes) else "pypad"
+        header = ""
+        if scope == "pypad" and idx == 0:
+            header = "PyPad Core"
+        elif scope == "npp" and (idx == 0 or self._nav_scopes[idx - 1] != "npp"):
+            header = "N++ Compatibility"
+        return f"{header}\n{base}{suffix}" if header else f"{base}{suffix}"
+
+    def _page_description_for_name(self, name: str) -> str:
+        text = str(name or "")
+        key = self._normalize_route_key(text.replace("N++ •", ""))
+        descriptions = {
+            "appearance": "Theme, colors, fonts, and visual density for the app.",
+            "editor": "Core editing behavior, syntax defaults, and caret options.",
+            "language": "App language and translation cache controls.",
+            "tabs": "Tab size, close buttons, elide mode, and double-click actions.",
+            "layout": "Dock layout persistence, autosave, and panel shortcuts.",
+            "workspace": "Workspace root and file tree scanning behavior.",
+            "search": "Find defaults and highlight behavior.",
+            "shortcuts": "Shortcut profile, conflict policy, and mapper tools.",
+            "ai-updates": "AI model, privacy redaction, and update checks.",
+            "privacy-security": "Lock screen, recovery behavior, and local history.",
+            "backup-restore": "Settings export/import and profile backup helpers.",
+            "advanced": "Diagnostics, logging, plugin startup, and experimental flags.",
+            "npp-general": "Classic UI visibility controls compatible with N++ preferences.",
+            "npp-toolbar": "Toolbar visibility, icon mode, and colorization presets.",
+            "npp-tab-bar": "Tab bar behavior and look-and-feel compatibility options.",
+            "npp-editing-1": "Cursor/line/wrap and editing interaction preferences.",
+            "npp-editing-2": "Multi-editing, EOL, and non-printing character preferences.",
+            "npp-dark-mode": "Dark mode style preferences and tone overrides.",
+            "npp-margins": "Line numbers, fold margin, edge, and padding options.",
+            "npp-new-document": "Default encoding, EOL, and new file behavior.",
+            "npp-default-directory": "Default open/save folder behavior.",
+            "npp-recent-files": "Recent files display and history limits.",
+            "npp-file-association": "Profile-managed file association extension lists.",
+            "npp-language": "Language menu compact mode and disabled items.",
+            "npp-indentation": "Indent defaults plus per-language override table.",
+            "npp-highlighting": "Token/tag/smart highlighting compatibility settings.",
+            "npp-print": "Print colors, margins, and header/footer templates.",
+            "npp-searching": "Find/Search dialog behavior preferences.",
+            "npp-backup": "Session snapshots and backup-on-save behavior.",
+            "npp-auto-completion": "Autocomplete trigger/input and auto-insert pairs.",
+            "npp-multi-instance-date": "Instance mode, datetime format, and panel state.",
+            "npp-delimiter": "Word and delimiter selection settings.",
+            "npp-performance": "Large file restriction and feature toggles.",
+            "npp-cloud-link": "Cloud settings location and clickable-link policy.",
+            "npp-search-engine": "Search on Internet provider and custom template URL.",
+            "npp-misc": "Extra notes and compatibility-specific misc settings.",
+        }
+        return descriptions.get(key, "Settings page")
+
+    def _on_nav_row_changed(self, row: int) -> None:
+        if row < 0 or row >= self.settings_pages.count():
+            return
+        self.settings_pages.setCurrentIndex(row)
+        title = self._clean_nav_title(self._nav_base_labels[row]) if row < len(self._nav_base_labels) else "Preferences"
+        self.settings_page_title.setText(title)
+        item = self.settings_nav_list.item(row)
+        self.settings_page_desc.setText(item.toolTip() if item is not None and item.toolTip() else "Settings page")
+
+    def _set_nav_scope(self, scope: str) -> None:
+        self._settings_nav_scope = scope if scope in {"all", "pypad", "npp"} else "all"
+        self.scope_all_btn.setChecked(self._settings_nav_scope == "all")
+        self.scope_pypad_btn.setChecked(self._settings_nav_scope == "pypad")
+        self.scope_npp_btn.setChecked(self._settings_nav_scope == "npp")
+        self._apply_search_filter(self.settings_search_input.text())
+
+    def _ensure_visible_nav_selection(self) -> None:
+        cur = self.settings_nav_list.currentRow()
+        if 0 <= cur < self.settings_nav_list.count():
+            item = self.settings_nav_list.item(cur)
+            if item is not None and not item.isHidden():
+                return
+        for i in range(self.settings_nav_list.count()):
+            item = self.settings_nav_list.item(i)
+            if item is not None and not item.isHidden():
+                self.settings_nav_list.setCurrentRow(i)
+                return
+
+    def _register_route_aliases(self, idx: int, *aliases: str) -> None:
+        for alias in aliases:
+            key = self._normalize_route_key(alias)
+            if key:
+                self._route_index_map[key] = idx
+
+    def focus_section(self, section: str) -> bool:
+        key = self._normalize_route_key(section)
+        if not key:
+            return False
+        key = key.removeprefix("settings-").removeprefix("preferences-")
+        idx = self._route_index_map.get(key)
+        if idx is None:
+            for route_key, route_idx in self._route_index_map.items():
+                if key in route_key or route_key in key:
+                    idx = route_idx
+                    break
+        if idx is None:
+            return False
+        self.settings_nav_list.setCurrentRow(int(idx))
+        return True
 
     def _register_search(self, category_idx: int, label: str, widget: QWidget) -> None:
         self._search_entries.append((category_idx, label.lower(), widget))
@@ -133,6 +350,47 @@ class SettingsDialog(QDialog):
         form.addRow(label, spin)
         self._register_search(category_idx, label, spin)
         return spin
+
+    def _apply_non_stretch_settings_layout(self) -> None:
+        for form in self.findChildren(QFormLayout):
+            try:
+                form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint)
+                form.setFormAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+                form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                form.setHorizontalSpacing(14)
+                form.setVerticalSpacing(8)
+                for row in range(form.rowCount()):
+                    label_item = form.itemAt(row, QFormLayout.ItemRole.LabelRole)
+                    if label_item is None:
+                        continue
+                    label_widget = label_item.widget()
+                    if isinstance(label_widget, QLabel):
+                        label_widget.setMinimumWidth(self._settings_form_label_width)
+                        label_widget.setMaximumWidth(self._settings_form_label_width)
+                        label_widget.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            except Exception:
+                pass
+        for widget_type in (QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit, QPushButton):
+            for widget in self.findChildren(widget_type):
+                try:
+                    policy = widget.sizePolicy()
+                    policy.setHorizontalPolicy(QSizePolicy.Policy.Maximum)
+                    widget.setSizePolicy(policy)
+                    if isinstance(widget, QComboBox):
+                        widget.setMinimumWidth(170)
+                    elif isinstance(widget, QLineEdit):
+                        widget.setMinimumWidth(180)
+                    elif isinstance(widget, (QSpinBox, QDoubleSpinBox)):
+                        widget.setMinimumWidth(88)
+                    elif isinstance(widget, QPushButton) and widget.objectName() != "settingsScopeBtn":
+                        widget.setMinimumWidth(max(widget.minimumWidth(), 84))
+                except Exception:
+                    pass
+        for slider in self.findChildren(QSlider):
+            try:
+                slider.setMaximumWidth(240)
+            except Exception:
+                pass
 
     def _build_color_row(self, parent: QWidget, category_idx: int, label: str) -> tuple[QLabel, QWidget]:
         holder = QWidget(parent)
@@ -174,6 +432,7 @@ class SettingsDialog(QDialog):
         appearance_form = QFormLayout()
         appearance_layout.addLayout(appearance_form)
         idx = self._add_category("🎨 Appearance", appearance)
+        self._register_route_aliases(idx, "appearance", "theme", "look", "npp-dark-mode")
 
         self.dark_checkbox = self._add_check(appearance_form, idx, "Enable dark mode")
         styles = sorted(QStyleFactory.keys())
@@ -210,6 +469,7 @@ class SettingsDialog(QDialog):
         self.show_markdown_toolbar_checkbox = self._add_check(appearance_form, idx, "Show markdown toolbar")
         self.show_find_panel_checkbox = self._add_check(appearance_form, idx, "Show find panel")
         self.simple_mode_checkbox = self._add_check(appearance_form, idx, "Enable simple mode")
+        build_npp_dark_mode_embedded_group(self, appearance_layout, idx)
         appearance_layout.addStretch(1)
         self.font_size_slider.valueChanged.connect(lambda v: self.font_size_label.setText(str(v)))
 
@@ -217,6 +477,7 @@ class SettingsDialog(QDialog):
         editor = QWidget(self)
         editor_layout = QFormLayout(editor)
         idx = self._add_category("✍️ Editor", editor)
+        self._register_route_aliases(idx, "editor")
         self.syntax_highlight_checkbox = self._add_check(editor_layout, idx, "Enable code syntax highlighting")
         self.syntax_mode_combo = self._add_combo(editor_layout, idx, "Syntax mode", ["Auto", "Python", "JavaScript", "JSON", "Markdown", "Plain"])
         self.checklist_toggle_checkbox = self._add_check(editor_layout, idx, "Enable checklist toggle action")
@@ -231,6 +492,7 @@ class SettingsDialog(QDialog):
         language = QWidget(self)
         language_layout = QFormLayout(language)
         idx = self._add_category("Language", language)
+        self._register_route_aliases(idx, "language", "i18n")
         self.language_combo = self._add_combo(language_layout, idx, "App language", get_language_display_options())
         self.clear_translation_cache_btn = QPushButton("Clear translation cache", language)
         language_layout.addRow("", self.clear_translation_cache_btn)
@@ -241,6 +503,7 @@ class SettingsDialog(QDialog):
         tabs = QWidget(self)
         tabs_layout = QFormLayout(tabs)
         idx = self._add_category("🗂️ Tabs", tabs)
+        self._register_route_aliases(idx, "tabs")
         self.tab_close_mode_combo = self._add_combo(tabs_layout, idx, "Close button mode", ["always", "hover"])
         self.tab_elide_combo = self._add_combo(tabs_layout, idx, "Tab elide mode", ["right", "middle", "none"])
         self.tab_min_width_spin = self._add_spin(tabs_layout, idx, "Tab min width", 80, 220)
@@ -251,15 +514,20 @@ class SettingsDialog(QDialog):
         layout_page = QWidget(self)
         layout_form = QFormLayout(layout_page)
         idx = self._add_category("🧩 Layout", layout_page)
+        self._register_route_aliases(idx, "layout", "window-layout")
         self.layout_auto_save_checkbox = self._add_check(layout_form, idx, "Auto-save layout on dock/toolbar move")
         self.snap_dock_shortcuts_checkbox = self._add_check(layout_form, idx, "Enable snap dock shortcuts")
         self.per_tab_splitter_sizes_checkbox = self._add_check(layout_form, idx, "Per-tab editor splitter sizes")
+        self.autosave_enabled_checkbox = self._add_check(layout_form, idx, "Enable autosave (draft recovery)")
+        self.autosave_interval_sec_spin = self._add_spin(layout_form, idx, "Autosave interval (sec)", 5, 3600)
         self.autosave_include_pdf_checkbox = self._add_check(layout_form, idx, "Allow autosave IDs for PDFs")
+        self.autosave_enabled_checkbox.toggled.connect(self.autosave_interval_sec_spin.setEnabled)
 
         # Workspace
         workspace = QWidget(self)
         workspace_layout = QFormLayout(workspace)
         idx = self._add_category("📁 Workspace", workspace)
+        self._register_route_aliases(idx, "workspace")
         self.workspace_root_edit = QLineEdit(workspace)
         workspace_layout.addRow("Workspace root", self.workspace_root_edit)
         self._register_search(idx, "Workspace root", self.workspace_root_edit)
@@ -271,6 +539,7 @@ class SettingsDialog(QDialog):
         search = QWidget(self)
         search_layout = QFormLayout(search)
         idx = self._add_category("🔎 Search", search)
+        self._register_route_aliases(idx, "search", "find")
         self.search_default_match_case_checkbox = self._add_check(search_layout, idx, "Default match case")
         self.search_default_whole_word_checkbox = self._add_check(search_layout, idx, "Default whole word")
         self.search_default_regex_checkbox = self._add_check(search_layout, idx, "Default regex")
@@ -282,6 +551,7 @@ class SettingsDialog(QDialog):
         shortcuts = QWidget(self)
         shortcuts_layout = QVBoxLayout(shortcuts)
         idx = self._add_category("⌨️ Shortcuts", shortcuts)
+        self._register_route_aliases(idx, "shortcuts", "keys", "hotkeys")
         shortcuts_form = QFormLayout()
         shortcuts_layout.addLayout(shortcuts_form)
         self.shortcut_profile_combo = self._add_combo(shortcuts_form, idx, "Shortcut profile", ["default", "vscode"])
@@ -304,6 +574,7 @@ class SettingsDialog(QDialog):
         ai = QWidget(self)
         ai_layout = QFormLayout(ai)
         idx = self._add_category("🤖 AI & Updates", ai)
+        self._register_route_aliases(idx, "ai", "ai-updates", "updates", "ai-and-updates")
         self.gemini_api_key_edit = QLineEdit(ai)
         self.gemini_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
         ai_layout.addRow("Gemini API key", self.gemini_api_key_edit)
@@ -311,6 +582,20 @@ class SettingsDialog(QDialog):
         self.ai_model_edit = QLineEdit(ai)
         ai_layout.addRow("Model", self.ai_model_edit)
         self._register_search(idx, "Model", self.ai_model_edit)
+        self.ai_app_knowledge_edit = QTextEdit(ai)
+        self.ai_app_knowledge_edit.setMinimumHeight(180)
+        self.ai_app_knowledge_edit.setPlaceholderText(
+            "Optional user knowledge appended to AI prompts (kept separate from src/pypad/ai_app_knowledge.py)."
+        )
+        ai_layout.addRow("AI User Knowledge", self.ai_app_knowledge_edit)
+        self._register_search(idx, "AI User Knowledge", self.ai_app_knowledge_edit)
+        self.ai_personality_advanced_edit = QTextEdit(ai)
+        self.ai_personality_advanced_edit.setMinimumHeight(110)
+        self.ai_personality_advanced_edit.setPlaceholderText(
+            "Advanced: extra personality/behavior instructions appended to AI prompts."
+        )
+        ai_layout.addRow("AI Personality (Advanced)", self.ai_personality_advanced_edit)
+        self._register_search(idx, "AI Personality Advanced", self.ai_personality_advanced_edit)
         self.update_feed_url_edit = QLineEdit(ai)
         self.update_feed_url_edit.setPlaceholderText(DEFAULT_UPDATE_FEED_URL)
         self.update_feed_url_edit.setReadOnly(True)
@@ -332,6 +617,26 @@ class SettingsDialog(QDialog):
         self.ai_key_storage_mode_combo = self._add_combo(ai_layout, idx, "AI key storage mode", ["settings", "env_only"])
         self.ai_private_mode_checkbox = self._add_check(ai_layout, idx, "Enable AI private mode (disable AI calls)")
         self.ai_rewrite_approval_checkbox = self._add_check(ai_layout, idx, "Require approval before applying AI rewrite")
+        self.ai_apply_review_mode_combo = self._add_combo(
+            ai_layout,
+            idx,
+            "AI apply review mode",
+            ["always_preview", "direct_insert_only", "legacy_direct_apply"],
+        )
+        self.ai_regression_guard_checkbox = self._add_check(ai_layout, idx, "Enable regression guard prompts for AI file edits")
+        self.ai_template_nearby_lines_radius_spin = self._add_spin(ai_layout, idx, "Template nearby lines radius", 0, 200)
+        self.ai_session_default_include_current_file_auto_checkbox = self._add_check(
+            ai_layout, idx, "Default chat memory: auto include current file"
+        )
+        self.ai_session_default_include_workspace_snippets_auto_checkbox = self._add_check(
+            ai_layout, idx, "Default chat memory: auto include workspace snippets"
+        )
+        self.ai_session_default_strict_citations_only_checkbox = self._add_check(
+            ai_layout, idx, "Default chat memory: strict citations only"
+        )
+        self.ai_session_default_allow_hidden_apply_commands_checkbox = self._add_check(
+            ai_layout, idx, "Default chat memory: allow hidden apply commands"
+        )
         self.ai_verbose_logging_checkbox = self._add_check(ai_layout, idx, "Enable AI verbose logging")
         self.ai_cost_rate_spin = QDoubleSpinBox(ai)
         self.ai_cost_rate_spin.setDecimals(6)
@@ -344,6 +649,7 @@ class SettingsDialog(QDialog):
         privacy = QWidget(self)
         privacy_layout = QFormLayout(privacy)
         idx = self._add_category("🔐 Privacy & Security", privacy)
+        self._register_route_aliases(idx, "privacy", "security", "privacy-security")
         self.privacy_lock_checkbox = self._add_check(privacy_layout, idx, "Enable lock screen on open")
         self.lock_password_edit = QLineEdit(privacy)
         self.lock_password_edit.setEchoMode(QLineEdit.EchoMode.Password)
@@ -362,6 +668,7 @@ class SettingsDialog(QDialog):
         backup = QWidget(self)
         backup_layout = QVBoxLayout(backup)
         idx = self._add_category("💾 Backup & Restore", backup)
+        self._register_route_aliases(idx, "backup", "restore", "backup-restore")
         backup_buttons = QHBoxLayout()
         self.backup_btn = QPushButton("Backup Settings...", backup)
         self.restore_btn = QPushButton("Restore Settings...", backup)
@@ -398,8 +705,15 @@ class SettingsDialog(QDialog):
         advanced = QWidget(self)
         advanced_layout = QFormLayout(advanced)
         idx = self._add_category("🧪 Advanced", advanced)
+        self._register_route_aliases(idx, "advanced")
         self.experimental_checkbox = self._add_check(advanced_layout, idx, "Enable experimental features")
         self.debug_telemetry_checkbox = self._add_check(advanced_layout, idx, "Enable debug telemetry")
+        self.logging_level_combo = self._add_combo(
+            advanced_layout,
+            idx,
+            "Logging level",
+            ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        )
         self.save_debug_logs_checkbox = self._add_check(
             advanced_layout,
             idx,
@@ -426,6 +740,9 @@ class SettingsDialog(QDialog):
         advanced_layout.addRow("Settings schema version", self.settings_schema_version_label)
         self._register_search(idx, "Settings schema version", self.settings_schema_version_label)
 
+        # Notepad++-style granular preferences (extended pages)
+        build_notepadpp_like_pages(self)
+
     def _apply_search_filter(self, text: str) -> None:
         query = text.strip().lower()
         for widget in self._highlighted_widgets:
@@ -441,9 +758,16 @@ class SettingsDialog(QDialog):
             matching = [i for i, c in enumerate(counts) if c > 0]
             if len(matching) == 1:
                 self.settings_nav_list.setCurrentRow(matching[0])
-        for idx, base in enumerate(self._nav_base_labels):
-            suffix = f" ({counts[idx]})" if query and counts[idx] else ""
-            self.settings_nav_list.item(idx).setText(f"{base}{suffix}")
+        for idx, _base in enumerate(self._nav_base_labels):
+            item = self.settings_nav_list.item(idx)
+            if item is None:
+                continue
+            scope = self._nav_scopes[idx] if idx < len(self._nav_scopes) else "pypad"
+            scope_hidden = self._settings_nav_scope != "all" and scope != self._settings_nav_scope
+            search_hidden = bool(query) and counts[idx] <= 0
+            item.setHidden(scope_hidden or search_hidden)
+            item.setText(self._format_nav_item_text(idx, counts[idx], query_active=bool(query)))
+        self._ensure_visible_nav_selection()
 
     def _set_color_label(self, label: QLabel, value: str) -> None:
         if value:
@@ -468,39 +792,100 @@ class SettingsDialog(QDialog):
                 background: {bg};
                 color: {text};
             }}
-            QListWidget, QStackedWidget, QGroupBox {{
+            #settingsHeaderCard {{
+                background: {panel};
+                border: 1px solid {border};
+                border-radius: 6px;
+            }}
+            #settingsPageTitle {{
+                color: {text};
+                background: transparent;
+                font-size: 16px;
+                font-weight: 700;
+            }}
+            #settingsPageDesc {{
+                color: {"#aeb4bc" if dark_mode else "#56606b"};
+                background: transparent;
+            }}
+            #settingsNavList, #settingsPageStack, QGroupBox {{
                 background: {panel};
                 color: {text};
                 border: 1px solid {border};
             }}
-            QListWidget::item {{
-                padding: 4px 6px;
-                border: 1px solid transparent;
+            #settingsNavList {{
+                border-radius: 6px;
+                outline: none;
+                padding: 4px;
             }}
-            QListWidget::item:hover {{
+            #settingsNavList::item {{
+                padding: 3px 7px;
+                border: 1px solid transparent;
+                border-radius: 4px;
+                font-size: 12px;
+            }}
+            #settingsNavList::item:hover {{
                 background: {hover};
             }}
-            QListWidget::item:selected {{
+            #settingsNavList::item:selected {{
                 background: {accent_color};
                 color: #ffffff;
             }}
+            #settingsSearchInput {{
+                min-height: 26px;
+                padding: 2px 8px;
+                border-radius: 6px;
+            }}
+            QPushButton#settingsScopeBtn {{
+                min-width: 64px;
+                padding: 4px 12px;
+                border-radius: 0;
+                background: {panel};
+            }}
+            QPushButton#settingsScopeBtn[scopePos="left"] {{
+                border-top-left-radius: 6px;
+                border-bottom-left-radius: 6px;
+            }}
+            QPushButton#settingsScopeBtn[scopePos="right"] {{
+                border-top-right-radius: 6px;
+                border-bottom-right-radius: 6px;
+            }}
+            QPushButton#settingsScopeBtn:checked {{
+                background: {accent_color};
+                color: #ffffff;
+                border: 1px solid {accent_color};
+            }}
             QGroupBox {{
-                margin-top: 8px;
-                padding-top: 8px;
+                margin-top: 10px;
+                padding: 8px 10px 10px 10px;
+                border-radius: 6px;
             }}
             QGroupBox::title {{
                 subcontrol-origin: margin;
-                left: 8px;
+                left: 10px;
                 padding: 0 4px;
             }}
-            QLabel, QCheckBox {{
+            QLabel, QCheckBox, QRadioButton {{
                 color: {text};
                 background: transparent;
             }}
-            QLineEdit, QComboBox, QSpinBox, QSlider {{
+            QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit, QPlainTextEdit, QListWidget, QTableWidget {{
                 background: {input_bg};
                 color: {text};
                 border: 1px solid {border};
+                border-radius: 4px;
+            }}
+            QSlider::groove:horizontal {{
+                border: 1px solid {border};
+                background: {panel};
+                height: 6px;
+                border-radius: 3px;
+            }}
+            QSlider::handle:horizontal {{
+                background: {accent_color};
+                width: 12px;
+                margin: -5px 0;
+                border-radius: 6px;
+                border: 1px solid {accent_color};
             }}
             QComboBox QAbstractItemView {{
                 background: {panel};
@@ -513,6 +898,7 @@ class SettingsDialog(QDialog):
                 color: {text};
                 border: 1px solid {border};
                 padding: 4px 10px;
+                border-radius: 4px;
             }}
             QPushButton:hover {{
                 background: {hover};
@@ -587,6 +973,8 @@ class SettingsDialog(QDialog):
 
         self.gemini_api_key_edit.setText(str(s.get("gemini_api_key", "")))
         self.ai_model_edit.setText(str(s.get("ai_model", "gemini-3-flash-preview")))
+        self.ai_app_knowledge_edit.setPlainText(str(s.get("ai_app_knowledge_override", "") or ""))
+        self.ai_personality_advanced_edit.setPlainText(str(s.get("ai_personality_advanced", "") or ""))
         self.update_feed_url_edit.setText(str(s.get("update_feed_url", DEFAULT_UPDATE_FEED_URL)))
         self.auto_check_updates_checkbox.setChecked(bool(s.get("auto_check_updates", True)))
         self.update_require_signed_checkbox.setChecked(bool(s.get("update_require_signed_metadata", False)))
@@ -598,6 +986,21 @@ class SettingsDialog(QDialog):
         self.ai_key_storage_mode_combo.setCurrentText(str(s.get("ai_key_storage_mode", "settings")))
         self.ai_private_mode_checkbox.setChecked(bool(s.get("ai_private_mode", False)))
         self.ai_rewrite_approval_checkbox.setChecked(bool(s.get("ai_rewrite_require_approval", True)))
+        self.ai_apply_review_mode_combo.setCurrentText(str(s.get("ai_apply_review_mode", "always_preview")))
+        self.ai_regression_guard_checkbox.setChecked(bool(s.get("ai_enable_regression_guard_prompts", True)))
+        self.ai_template_nearby_lines_radius_spin.setValue(int(s.get("ai_template_nearby_lines_radius", 20)))
+        self.ai_session_default_include_current_file_auto_checkbox.setChecked(
+            bool(s.get("ai_session_default_include_current_file_auto", False))
+        )
+        self.ai_session_default_include_workspace_snippets_auto_checkbox.setChecked(
+            bool(s.get("ai_session_default_include_workspace_snippets_auto", False))
+        )
+        self.ai_session_default_strict_citations_only_checkbox.setChecked(
+            bool(s.get("ai_session_default_strict_citations_only", False))
+        )
+        self.ai_session_default_allow_hidden_apply_commands_checkbox.setChecked(
+            bool(s.get("ai_session_default_allow_hidden_apply_commands", True))
+        )
         self.ai_verbose_logging_checkbox.setChecked(bool(s.get("ai_verbose_logging", False)))
         self.ai_cost_rate_spin.setValue(float(s.get("ai_estimated_cost_per_1k_tokens", 0.0005) or 0.0005))
 
@@ -613,14 +1016,19 @@ class SettingsDialog(QDialog):
         self.experimental_checkbox.setChecked(bool(s.get("experimental_features", False)))
         self.debug_telemetry_checkbox.setChecked(bool(s.get("debug_telemetry_enabled", False)))
         self.save_debug_logs_checkbox.setChecked(bool(s.get("save_debug_logs_to_appdata", False)))
+        self.logging_level_combo.setCurrentText(str(s.get("logging_level", "INFO")).upper())
         self.plugin_startup_safe_mode_checkbox.setChecked(bool(s.get("plugin_startup_safe_mode", False)))
         self.defer_plugin_load_checkbox.setChecked(bool(s.get("defer_plugin_load_on_startup", True)))
         self.plugin_startup_defer_ms_spin.setValue(int(s.get("plugin_startup_defer_ms", 1200)))
         self.layout_auto_save_checkbox.setChecked(bool(s.get("layout_auto_save_enabled", True)))
         self.snap_dock_shortcuts_checkbox.setChecked(bool(s.get("snap_dock_shortcuts_enabled", True)))
         self.per_tab_splitter_sizes_checkbox.setChecked(bool(s.get("per_tab_splitter_sizes_enabled", True)))
+        self.autosave_enabled_checkbox.setChecked(bool(s.get("autosave_enabled", True)))
+        self.autosave_interval_sec_spin.setValue(int(s.get("autosave_interval_sec", 30)))
+        self.autosave_interval_sec_spin.setEnabled(self.autosave_enabled_checkbox.isChecked())
         self.autosave_include_pdf_checkbox.setChecked(bool(s.get("autosave_include_pdf", False)))
         self.settings_schema_version_label.setText(str(int(s.get("settings_schema_version", 2))))
+        load_notepadpp_like_page_settings(self, s)
 
     def _collect_settings(self) -> dict:
         s = dict(self._settings)
@@ -677,6 +1085,8 @@ class SettingsDialog(QDialog):
 
         s["gemini_api_key"] = self.gemini_api_key_edit.text().strip()
         s["ai_model"] = self.ai_model_edit.text().strip() or "gemini-3-flash-preview"
+        s["ai_app_knowledge_override"] = self.ai_app_knowledge_edit.toPlainText().strip()
+        s["ai_personality_advanced"] = self.ai_personality_advanced_edit.toPlainText().strip()
         s["update_feed_url"] = self.update_feed_url_edit.text().strip() or DEFAULT_UPDATE_FEED_URL
         s["auto_check_updates"] = self.auto_check_updates_checkbox.isChecked()
         s["update_require_signed_metadata"] = self.update_require_signed_checkbox.isChecked()
@@ -688,6 +1098,17 @@ class SettingsDialog(QDialog):
         s["ai_key_storage_mode"] = self.ai_key_storage_mode_combo.currentText()
         s["ai_private_mode"] = self.ai_private_mode_checkbox.isChecked()
         s["ai_rewrite_require_approval"] = self.ai_rewrite_approval_checkbox.isChecked()
+        s["ai_apply_review_mode"] = self.ai_apply_review_mode_combo.currentText()
+        s["ai_enable_regression_guard_prompts"] = self.ai_regression_guard_checkbox.isChecked()
+        s["ai_template_nearby_lines_radius"] = int(self.ai_template_nearby_lines_radius_spin.value())
+        s["ai_session_default_include_current_file_auto"] = self.ai_session_default_include_current_file_auto_checkbox.isChecked()
+        s["ai_session_default_include_workspace_snippets_auto"] = (
+            self.ai_session_default_include_workspace_snippets_auto_checkbox.isChecked()
+        )
+        s["ai_session_default_strict_citations_only"] = self.ai_session_default_strict_citations_only_checkbox.isChecked()
+        s["ai_session_default_allow_hidden_apply_commands"] = (
+            self.ai_session_default_allow_hidden_apply_commands_checkbox.isChecked()
+        )
         s["ai_verbose_logging"] = self.ai_verbose_logging_checkbox.isChecked()
         s["ai_estimated_cost_per_1k_tokens"] = float(self.ai_cost_rate_spin.value())
 
@@ -703,21 +1124,32 @@ class SettingsDialog(QDialog):
         s["experimental_features"] = self.experimental_checkbox.isChecked()
         s["debug_telemetry_enabled"] = self.debug_telemetry_checkbox.isChecked()
         s["save_debug_logs_to_appdata"] = self.save_debug_logs_checkbox.isChecked()
+        s["logging_level"] = self.logging_level_combo.currentText().strip().upper() or "INFO"
         s["plugin_startup_safe_mode"] = self.plugin_startup_safe_mode_checkbox.isChecked()
         s["defer_plugin_load_on_startup"] = self.defer_plugin_load_checkbox.isChecked()
         s["plugin_startup_defer_ms"] = int(self.plugin_startup_defer_ms_spin.value())
         s["layout_auto_save_enabled"] = self.layout_auto_save_checkbox.isChecked()
         s["snap_dock_shortcuts_enabled"] = self.snap_dock_shortcuts_checkbox.isChecked()
         s["per_tab_splitter_sizes_enabled"] = self.per_tab_splitter_sizes_checkbox.isChecked()
+        s["autosave_enabled"] = self.autosave_enabled_checkbox.isChecked()
+        s["autosave_interval_sec"] = int(self.autosave_interval_sec_spin.value())
         s["autosave_include_pdf"] = self.autosave_include_pdf_checkbox.isChecked()
         s["settings_schema_version"] = 2
+        collect_notepadpp_like_page_settings(self, s)
         return migrate_settings(s)
 
-    def _apply_to_memory(self) -> None:
+    def _apply_to_memory(self) -> bool:
+        errors = validate_notepadpp_like_page_inputs(self)
+        if errors:
+            focus_first_invalid_notepadpp_like_input(self)
+            QMessageBox.warning(self, "Fix Settings Validation Errors", "\n\n".join(errors))
+            return False
         self._settings = self._collect_settings()
+        return True
 
     def _accept_with_apply(self) -> None:
-        self._apply_to_memory()
+        if not self._apply_to_memory():
+            return
         self.accept()
 
     def _reset_controls_to_defaults(self) -> None:
@@ -737,7 +1169,7 @@ class SettingsDialog(QDialog):
         return dict(self._settings)
 
     def _export_profile(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(self, "Export Profile", "", "Settings Files (*.json);;All Files (*.*)")
+        path, _ = themed_file_dialog_get_save_file_name(self, "Export Profile", "", "Settings Files (*.json);;All Files (*.*)")
         if not path:
             return
         payload = self._collect_settings()
@@ -748,7 +1180,7 @@ class SettingsDialog(QDialog):
             QMessageBox.critical(self, "Export Profile Failed", f"Could not export profile:\n{exc}")
 
     def _import_profile(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Import Profile", "", "Settings Files (*.json);;All Files (*.*)")
+        path, _ = themed_file_dialog_get_open_file_name(self, "Import Profile", "", "Settings Files (*.json);;All Files (*.*)")
         if not path:
             return
         try:
@@ -769,14 +1201,16 @@ class SettingsDialog(QDialog):
         self._import_profile()
 
     def _edit_with_settings_json(self) -> None:
-        self._apply_to_memory()
+        if not self._apply_to_memory():
+            return
         self._parent_window.settings = self.get_settings()
         self._parent_window.save_settings_to_disk()
         self.accept()
         QTimer.singleShot(0, self._parent_window.edit_settings_json_in_app)
 
     def _open_mapper_from_settings(self) -> None:
-        self._apply_to_memory()
+        if not self._apply_to_memory():
+            return
         self._parent_window.settings = self.get_settings()
         self._parent_window.open_shortcut_mapper()
         self._settings = dict(self._parent_window.settings)
@@ -784,7 +1218,7 @@ class SettingsDialog(QDialog):
 
     def _pick_backup_output_dir(self) -> None:
         start_dir = self.backup_output_dir_edit.text().strip() or ""
-        picked = QFileDialog.getExistingDirectory(self, "Choose Backup Output Folder", start_dir)
+        picked = themed_file_dialog_get_existing_directory(self, "Choose Backup Output Folder", start_dir)
         if picked:
             self.backup_output_dir_edit.setText(picked)
 

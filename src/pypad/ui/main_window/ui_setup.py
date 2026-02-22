@@ -79,6 +79,15 @@ from ..syntax_highlighter import CodeSyntaxHighlighter
 from ..updater_controller import UpdaterController
 from ..version_history import LocalHistoryTimelineDialog, VersionHistoryDialog
 from ..workspace_controller import WorkspaceController
+from ...logging_utils import (
+    clear_console_log_lines,
+    configure_app_logging,
+    get_console_log_lines,
+    get_level_number,
+    get_logger,
+    normalize_log_level_name,
+)
+from .notepadpp_pref_runtime import apply_indentation_defaults_to_tab, new_document_defaults
 
 
 
@@ -101,6 +110,25 @@ class UiSetupMixin:
         def _get_debug_logs_file_path(self) -> Path: ...
         def _get_crash_logs_file_path(self) -> Path: ...
         def __getattr__(self, name: str) -> Any: ...
+
+    @staticmethod
+    def _normalize_log_event_level(level: str) -> str:
+        text = str(level or "").strip().upper()
+        aliases = {"WARN": "WARNING", "ERR": "ERROR"}
+        return aliases.get(text, text or "INFO")
+
+    def _active_logging_level(self) -> str:
+        settings = getattr(self, "settings", {}) or {}
+        return normalize_log_level_name(settings.get("logging_level", "INFO"))
+
+    def apply_logging_preferences(self) -> None:
+        try:
+            level_name = configure_app_logging(self._active_logging_level())
+        except Exception:
+            return
+        settings = getattr(self, "settings", None)
+        if isinstance(settings, dict):
+            settings["logging_level"] = level_name
 
     @staticmethod
     def _force_svg_monochrome(svg_text: str, color_hex: str) -> str:
@@ -202,8 +230,7 @@ class UiSetupMixin:
             prefix += "[Enc] "
         if tab.large_file:
             prefix += "[Large] "
-        suffix = " [PIN]" if tab.pinned else ""
-        return f"{prefix}{base}{suffix}"
+        return f"{prefix}{base}"
 
     @staticmethod
     def _format_log_line(level: str, message: str) -> str:
@@ -214,8 +241,17 @@ class UiSetupMixin:
         return f"[{level_title}] [{timestamp} {date}] {message}"
 
     def log_event(self, level: str, message: str) -> None:
-        line = self._format_log_line(level, message)
-        print(line)
+        normalized_level = self._normalize_log_event_level(level)
+        try:
+            if get_level_number(normalized_level) < get_level_number(self._active_logging_level()):
+                return
+        except Exception:
+            pass
+        line = self._format_log_line(normalized_level, message)
+        try:
+            get_logger("pypad.ui").log(get_level_number(normalized_level), message)
+        except Exception:
+            print(line)
         self.debug_logs.append(line)
         if len(self.debug_logs) > 5000:
             self.debug_logs = self.debug_logs[-5000:]
@@ -244,16 +280,30 @@ class UiSetupMixin:
 
     def clear_debug_logs(self) -> None:
         self.debug_logs.clear()
+        clear_console_log_lines()
         if self.debug_logs_dialog is not None:
-            self.debug_logs_dialog.set_lines(self.debug_logs)
+            self.debug_logs_dialog.set_lines(self._combined_debug_log_lines())
         self.log_event("Info", "Debug logs cleared")
+
+    def _combined_debug_log_lines(self) -> list[str]:
+        app_lines = list(self.debug_logs)
+        console_lines = get_console_log_lines()
+        if not console_lines:
+            return app_lines
+        lines: list[str] = []
+        if app_lines:
+            lines.extend(app_lines)
+            lines.append("")
+            lines.append("===== Captured Console (Process-wide) =====")
+        lines.extend(console_lines)
+        return lines
 
     def show_debug_logs(self) -> None:
         if self.debug_logs_dialog is None:
             self.debug_logs_dialog = DebugLogsDialog(self)
             self.debug_logs_dialog.clear_button.clicked.disconnect()
             self.debug_logs_dialog.clear_button.clicked.connect(self.clear_debug_logs)
-        self.debug_logs_dialog.set_lines(self.debug_logs)
+        self.debug_logs_dialog.set_lines(self._combined_debug_log_lines())
         self.debug_logs_dialog.show()
         self.debug_logs_dialog.raise_()
         self.debug_logs_dialog.activateWindow()
@@ -307,7 +357,7 @@ class UiSetupMixin:
         fallback = self._standard_style_icon("SP_FileIcon")
         base_icon = self._file_icon_for_tab(tab, fallback)
 
-        if not (tab.favorite or tab.pinned or tab.read_only):
+        if not tab.read_only:
             return base_icon
 
         base_pixmap = base_icon.pixmap(18, 18)
@@ -316,12 +366,6 @@ class UiSetupMixin:
 
         overlay_size = 9
         pad = 0
-        if tab.pinned:
-            pin_pixmap = self._svg_icon_colored("tab-pin", size=overlay_size).pixmap(overlay_size, overlay_size)
-            painter.drawPixmap(pad, pad, pin_pixmap)
-        if tab.favorite:
-            heart_pixmap = self._svg_icon_colored("tab-heart", size=overlay_size).pixmap(overlay_size, overlay_size)
-            painter.drawPixmap(18 - overlay_size - pad, pad, heart_pixmap)
         if tab.read_only:
             lock_pixmap = self._svg_icon_colored("tab-lock", size=overlay_size).pixmap(overlay_size, overlay_size)
             painter.drawPixmap(pad, 18 - overlay_size - pad, lock_pixmap)
@@ -394,10 +438,54 @@ class UiSetupMixin:
         modified = "*" if tab.text_edit.is_modified() else ""
         self.tab_widget.setTabIcon(index, self._tab_icon_for(tab))
         self.tab_widget.setTabText(index, f"{modified}{self._tab_display_name(tab)}")
+        tab_bar = self.tab_widget.tabBar()
+        if hasattr(tab_bar, "refresh_tab_accessory"):
+            try:
+                tab_bar.refresh_tab_accessory(index)
+            except Exception:
+                pass
         if hasattr(self, "_apply_tab_color"):
             self._apply_tab_color(tab)
         if hasattr(self, "_refresh_window_menu_entries"):
             self._refresh_window_menu_entries()
+
+    def _sync_tab_modified_state_with_current_file(self, tab: EditorTab | None) -> None:
+        if tab is None:
+            return
+        path = str(getattr(tab, "current_file", "") or "").strip()
+        if not path:
+            return
+        if bool(getattr(tab, "large_file", False)) and bool(getattr(tab, "partial_large_preview", False)):
+            return
+        if str(path).lower().endswith(".encnote") or bool(getattr(tab, "encryption_enabled", False)):
+            return
+        try:
+            file_path = Path(path)
+            if not file_path.exists() or not file_path.is_file():
+                return
+        except Exception:
+            return
+
+        try:
+            encoding = str(getattr(tab, "encoding", "") or "utf-8")
+            disk_text = file_path.read_text(encoding=encoding, errors="replace")
+        except Exception:
+            return
+
+        try:
+            editor_text = tab.text_edit.get_text()
+            matches_disk = editor_text == disk_text
+            current_modified = bool(tab.text_edit.is_modified())
+        except Exception:
+            return
+
+        desired_modified = not matches_disk
+        if current_modified == desired_modified:
+            return
+        tab.text_edit.set_modified(desired_modified)
+        if tab is self.active_tab():
+            self.update_action_states()
+            self.update_status_bar()
 
     def _connect_tab_signals(self, tab: EditorTab) -> None:
         tab.text_edit.modificationChanged.connect(self._on_modification_changed)
@@ -489,6 +577,8 @@ class UiSetupMixin:
             tab = self.active_tab()
         if tab is None:
             return
+        if tab is self.active_tab():
+            self._sync_tab_modified_state_with_current_file(tab)
         if tab is self.active_tab() and tab.markdown_mode_enabled:
             self.update_markdown_preview()
         self._maybe_snapshot_version(tab)
@@ -846,6 +936,17 @@ class UiSetupMixin:
         tab.text_edit.set_font(font)
         tab.text_edit.set_text(text)
         tab.current_file = file_path
+        if not file_path:
+            npp_new_defaults = new_document_defaults(self.settings)
+            tab.encoding = str(npp_new_defaults.get("encoding") or "utf-8")
+            tab.eol_mode = str(npp_new_defaults.get("eol_mode") or "CRLF")
+            if tab.eol_mode in {"CRLF", "LF"} and text:
+                try:
+                    normalized = self._normalize_eol(text, tab.eol_mode) if hasattr(self, "_normalize_eol") else text
+                    if normalized != text:
+                        tab.text_edit.set_text(normalized)
+                except Exception:
+                    pass
         if file_path and file_path in set(self.settings.get("pinned_files", [])):
             tab.pinned = True
         self._apply_file_metadata_to_tab(tab)
@@ -867,6 +968,7 @@ class UiSetupMixin:
             self._ensure_tab_autosave_meta(tab)
         if hasattr(self, "_apply_scintilla_modes"):
             self._apply_scintilla_modes(tab)
+        apply_indentation_defaults_to_tab(self, tab)
 
         index = self.tab_widget.addTab(tab, self._tab_display_name(tab))
         if make_current:
@@ -892,6 +994,7 @@ class UiSetupMixin:
         tab = self.active_tab()
         if tab is None:
             return
+        self._sync_tab_modified_state_with_current_file(tab)
         self.log_event("Info", f'Active tab: "{self._tab_display_name(tab)}"')
         if hasattr(self, "md_toggle_preview_action"):
             self.md_toggle_preview_action.blockSignals(True)
@@ -1114,11 +1217,11 @@ class UiSetupMixin:
             "Enable Note Encryption": "Enable encrypted saves for the active note",
             "Disable Note Encryption": "Disable encrypted saves for the active note",
             "Change Note Password": "Change encryption password for the active note",
-            "Ask AI": "Ask Gemini a free-form question",
+            "Ask AI": "Open AI Chat and ask a free-form question",
             "Explain Selection with AI": "Explain currently selected text",
-            "AI Inline Edit (Preview)": "Use AI to edit selection or current paragraph with diff preview",
+            "AI Inline Edit (AI Chat Apply)": "Use AI Chat to edit selection/paragraph and confirm apply in chat",
             "Ask Workspace (Citations)": "Ask AI about workspace files with file/line citations",
-            "AI Collaboration Merge Draft": "Generate an AI merge draft for local/shared collaboration conflicts",
+            "AI Collaboration Merge Draft": "Generate an AI merge draft in AI Chat and confirm apply in chat",
             "Collaboration Presence": "Show active collaboration clients and server state",
             "Resolve Collaboration Conflict": "Resolve differences between local tab and collaboration shared text",
             "User Guide": "Open full usage guide",
@@ -1265,6 +1368,7 @@ class UiSetupMixin:
             "Search with Bing": "Search selected text on Bing",
             "Word Wrap": "Toggle wrapping long lines",
             "Font": "Change editor font",
+            "Text Size (Selection)": "Wrap selected text with a specific font size",
             "Bold": "Apply bold formatting",
             "Italic": "Apply italic formatting",
             "Underline": "Apply underline formatting",
@@ -1385,7 +1489,6 @@ class UiSetupMixin:
             "Settings": "Preferences and customization",
             "Tools": "Utilities and advanced tooling",
             "Macro": "Record and replay editing macros",
-            "Markdown": "Quick Markdown formatting commands",
             "Plugins": "Plugin management and plugin tools",
             "Help": "About information and extra tools",
         }
@@ -1399,7 +1502,6 @@ class UiSetupMixin:
             ("settings_menu", "Settings"),
             ("tools_menu", "Tools"),
             ("macros_menu", "Macro"),
-            ("markdown_menu", "Markdown"),
             ("plugins_menu", "Plugins"),
             ("help_menu", "Help"),
         ):
@@ -1489,6 +1591,11 @@ class UiSetupMixin:
         self.ai_rewrite_summarize_action.setEnabled(has_tab and has_selection and not ai_private_mode and not is_read_only)
         self.ai_ask_context_action.setEnabled(has_tab and not ai_private_mode)
         self.ai_workspace_citations_action.setEnabled(not ai_private_mode)
+        self.ai_review_file_citations_action.setEnabled(has_tab and not ai_private_mode)
+        self.ai_review_workspace_citations_action.setEnabled(not ai_private_mode)
+        self.ai_attach_current_file_chat_action.setEnabled(has_tab and not ai_private_mode)
+        self.ai_attach_selection_chat_action.setEnabled(has_tab and has_selection and not ai_private_mode)
+        self.ai_attach_workspace_search_chat_action.setEnabled(not ai_private_mode)
         self.ai_collab_merge_action.setEnabled(has_tab and not ai_private_mode and not is_read_only)
         self.ai_run_template_action.setEnabled(has_tab and not ai_private_mode)
         self.ai_save_template_action.setEnabled(True)
@@ -1802,6 +1909,7 @@ class UiSetupMixin:
             self.generate_toc_action,
             self.page_layout_action,
             self.font_action,
+            self.text_size_selection_action,
             self.zoom_in_action,
             self.zoom_out_action,
             self.zoom_reset_action,
@@ -1988,23 +2096,33 @@ class UiSetupMixin:
         self.ai_chat_panel_action.triggered.connect(self.toggle_ai_chat_panel)
         self.explain_selection_ai_action = QAction("Explain Selection with AI", self)
         self.explain_selection_ai_action.triggered.connect(self.explain_selection_with_ai)
-        self.ai_inline_edit_action = QAction("AI Inline Edit (Preview)...", self)
+        self.ai_inline_edit_action = QAction("AI Inline Edit (AI Chat Apply)...", self)
         self.ai_inline_edit_action.setShortcut(QKeySequence("Ctrl+Alt+E"))
         self.ai_inline_edit_action.triggered.connect(self.ai_inline_edit_with_preview)
-        self.ai_rewrite_shorten_action = QAction("Rewrite Selection: Shorten", self)
+        self.ai_rewrite_shorten_action = QAction("Rewrite Selection: Shorten (AI Chat Apply)", self)
         self.ai_rewrite_shorten_action.triggered.connect(lambda: self.ai_rewrite_selection("shorten"))
-        self.ai_rewrite_formal_action = QAction("Rewrite Selection: Formal", self)
+        self.ai_rewrite_formal_action = QAction("Rewrite Selection: Formal (AI Chat Apply)", self)
         self.ai_rewrite_formal_action.triggered.connect(lambda: self.ai_rewrite_selection("formal"))
-        self.ai_rewrite_grammar_action = QAction("Rewrite Selection: Fix Grammar", self)
+        self.ai_rewrite_grammar_action = QAction("Rewrite Selection: Fix Grammar (AI Chat Apply)", self)
         self.ai_rewrite_grammar_action.triggered.connect(lambda: self.ai_rewrite_selection("fix_grammar"))
-        self.ai_rewrite_summarize_action = QAction("Rewrite Selection: Summarize", self)
+        self.ai_rewrite_summarize_action = QAction("Rewrite Selection: Summarize (AI Chat Apply)", self)
         self.ai_rewrite_summarize_action.triggered.connect(lambda: self.ai_rewrite_selection("summarize"))
-        self.ai_ask_context_action = QAction("Ask About This File...", self)
+        self.ai_ask_context_action = QAction("Ask About This File (AI Chat)...", self)
         self.ai_ask_context_action.triggered.connect(self.ask_ai_about_current_context)
         self.ai_workspace_citations_action = QAction("Ask Workspace (Citations)...", self)
         self.ai_workspace_citations_action.setShortcut(QKeySequence("Ctrl+Alt+Q"))
         self.ai_workspace_citations_action.triggered.connect(self.ai_ask_workspace_with_citations)
-        self.ai_run_template_action = QAction("Run Prompt Template...", self)
+        self.ai_review_file_citations_action = QAction("Review Current File (Citations)...", self)
+        self.ai_review_file_citations_action.triggered.connect(self.ai_review_current_file_with_citations)
+        self.ai_review_workspace_citations_action = QAction("Review Workspace Snippets (Citations)...", self)
+        self.ai_review_workspace_citations_action.triggered.connect(self.ai_review_workspace_snippets_with_citations)
+        self.ai_attach_current_file_chat_action = QAction("Attach Current File to AI Chat", self)
+        self.ai_attach_current_file_chat_action.triggered.connect(self.ai_attach_current_file_to_chat)
+        self.ai_attach_selection_chat_action = QAction("Attach Selection to AI Chat", self)
+        self.ai_attach_selection_chat_action.triggered.connect(self.ai_attach_selection_to_chat)
+        self.ai_attach_workspace_search_chat_action = QAction("Attach Workspace Search Results to AI Chat", self)
+        self.ai_attach_workspace_search_chat_action.triggered.connect(self.ai_attach_workspace_search_to_chat)
+        self.ai_run_template_action = QAction("Run Prompt Template (AI Chat)...", self)
         self.ai_run_template_action.triggered.connect(self.run_ai_prompt_template)
         self.ai_save_template_action = QAction("Save Prompt Template...", self)
         self.ai_save_template_action.triggered.connect(self.save_ai_prompt_template)
@@ -2483,6 +2601,9 @@ class UiSetupMixin:
 
         self.font_action = QAction("&Font...", self)
         self.font_action.triggered.connect(self.choose_font)
+        self.text_size_selection_action = QAction("Text Si&ze (Selection)...", self)
+        self.text_size_selection_action.setShortcut(QKeySequence("Ctrl+Alt+Shift+Z"))
+        self.text_size_selection_action.triggered.connect(self.format_selection_text_size)
 
         self.bold_action = QAction("&Bold", self)
         self.bold_action.setShortcut(QKeySequence(QKeySequence.StandardKey.Bold))
@@ -2856,6 +2977,8 @@ class UiSetupMixin:
         self.check_updates_action.triggered.connect(lambda _checked=False: self.check_for_updates(manual=True))
         self.show_debug_logs_action = QAction("Show Debug Logs", self)
         self.show_debug_logs_action.triggered.connect(self.show_debug_logs)
+        self.open_source_licenses_action = QAction("Open Source Licenses...", self)
+        self.open_source_licenses_action.triggered.connect(self.show_open_source_licenses)
         self.shortcut_mapper_action = QAction("Shortcut Mapper...", self)
         self.shortcut_mapper_action.triggered.connect(self.open_shortcut_mapper)
         self.plugin_manager_action = QAction("Plugin Manager...", self)
@@ -2899,11 +3022,11 @@ class UiSetupMixin:
 
         self.ai_file_citations_action = QAction("Ask About File (Citations)...", self)
         self.ai_file_citations_action.triggered.connect(self.ai_ask_file_with_citations)
-        self.ai_commit_changelog_action = QAction("Generate Commit/Changelog Draft", self)
+        self.ai_commit_changelog_action = QAction("Generate Commit/Changelog Draft (AI Chat)", self)
         self.ai_commit_changelog_action.triggered.connect(self.ai_commit_message_generator)
-        self.ai_batch_refactor_action = QAction("Batch AI Refactor Preview...", self)
+        self.ai_batch_refactor_action = QAction("Batch AI Refactor Plan...", self)
         self.ai_batch_refactor_action.triggered.connect(self.ai_batch_refactor_preview)
-        self.ai_collab_merge_action = QAction("AI Collaboration Merge Draft...", self)
+        self.ai_collab_merge_action = QAction("AI Collaboration Merge Draft (AI Chat Apply)...", self)
         self.ai_collab_merge_action.triggered.connect(self.resolve_collaboration_conflict)
 
         self.backup_scheduler_action = QAction("Backup Scheduler...", self)
@@ -2982,7 +3105,12 @@ class UiSetupMixin:
             self.explain_selection_ai_action: "ai-explain",
             self.ai_inline_edit_action: "ai-inline-edit",
             self.ai_workspace_citations_action: "ai-workspace-cite",
+            self.ai_review_file_citations_action: "ai-review-file",
+            self.ai_review_workspace_citations_action: "ai-review-workspace",
             self.ai_file_citations_action: "ai-citations",
+            self.ai_attach_current_file_chat_action: "ai-attach",
+            self.ai_attach_selection_chat_action: "ai-attach",
+            self.ai_attach_workspace_search_chat_action: "ai-attach-search",
             self.ai_commit_changelog_action: "ai-changelog",
             self.ai_batch_refactor_action: "ai-refactor",
             self.ai_collab_merge_action: "ai-merge",
@@ -3270,6 +3398,12 @@ class UiSetupMixin:
         self.ai_menu.addSeparator()
         self.ai_menu.addAction(self.ai_ask_context_action)
         self.ai_menu.addAction(self.ai_workspace_citations_action)
+        self.ai_menu.addAction(self.ai_review_file_citations_action)
+        self.ai_menu.addAction(self.ai_review_workspace_citations_action)
+        self.ai_menu.addSeparator()
+        self.ai_menu.addAction(self.ai_attach_current_file_chat_action)
+        self.ai_menu.addAction(self.ai_attach_selection_chat_action)
+        self.ai_menu.addAction(self.ai_attach_workspace_search_chat_action)
         self.ai_menu.addAction(self.ai_run_template_action)
         self.ai_menu.addAction(self.ai_save_template_action)
         self.ai_menu.addSeparator()
@@ -3475,6 +3609,7 @@ class UiSetupMixin:
         self.format_menu.addAction(self.italic_action)
         self.format_menu.addAction(self.underline_action)
         self.format_menu.addAction(self.strikethrough_action)
+        self.format_menu.addAction(self.text_size_selection_action)
         self.format_menu.addSeparator()
         style_menu = self.format_menu.addMenu("Styles")
         style_menu.addAction(self.style_heading1_action)
@@ -3487,6 +3622,35 @@ class UiSetupMixin:
         style_menu.addAction(self.style_body_action)
         style_menu.addAction(self.style_quote_action)
         style_menu.addAction(self.style_code_action)
+        markdown_menu = self.format_menu.addMenu("Markdown")
+        markdown_headings_menu = markdown_menu.addMenu("Headings")
+        markdown_headings_menu.addAction(self.md_heading1_action)
+        markdown_headings_menu.addAction(self.md_heading2_action)
+        markdown_headings_menu.addAction(self.md_heading3_action)
+        markdown_headings_menu.addAction(self.md_heading4_action)
+        markdown_headings_menu.addAction(self.md_heading5_action)
+        markdown_headings_menu.addAction(self.md_heading6_action)
+        markdown_menu.addAction(self.md_bold_action)
+        markdown_menu.addAction(self.md_italic_action)
+        markdown_menu.addAction(self.md_strike_action)
+        markdown_menu.addAction(self.md_inline_code_action)
+        markdown_menu.addAction(self.md_code_block_action)
+        markdown_menu.addSeparator()
+        markdown_menu.addAction(self.md_bullet_action)
+        markdown_menu.addAction(self.md_numbered_action)
+        markdown_menu.addAction(self.md_task_action)
+        markdown_menu.addAction(self.md_toggle_task_action)
+        markdown_menu.addAction(self.md_quote_action)
+        markdown_menu.addSeparator()
+        markdown_menu.addAction(self.md_link_action)
+        markdown_menu.addAction(self.md_image_action)
+        markdown_menu.addAction(self.md_table_action)
+        markdown_menu.addAction(self.md_hr_action)
+        markdown_menu.addSeparator()
+        markdown_menu.addAction(self.md_toggle_preview_action)
+        markdown_menu.addAction(self.md_toolbar_visible_action)
+        self.format_menu.addSeparator()
+
         review_menu = self.format_menu.addMenu("Review")
         review_menu.addAction(self.track_changes_toggle_action)
         review_menu.addAction(self.insert_tracked_text_action)
@@ -3655,36 +3819,6 @@ class UiSetupMixin:
         self.macros_menu.aboutToShow.connect(self._sync_saved_macro_actions)
         self._sync_saved_macro_actions()
 
-        # Markdown
-        self.markdown_menu = menu_bar.addMenu("&Markdown")
-        headings_menu = self.markdown_menu.addMenu("&Headings")
-        headings_menu.addAction(self.md_heading1_action)
-        headings_menu.addAction(self.md_heading2_action)
-        headings_menu.addAction(self.md_heading3_action)
-        headings_menu.addAction(self.md_heading4_action)
-        headings_menu.addAction(self.md_heading5_action)
-        headings_menu.addAction(self.md_heading6_action)
-
-        self.markdown_menu.addAction(self.md_bold_action)
-        self.markdown_menu.addAction(self.md_italic_action)
-        self.markdown_menu.addAction(self.md_strike_action)
-        self.markdown_menu.addAction(self.md_inline_code_action)
-        self.markdown_menu.addAction(self.md_code_block_action)
-        self.markdown_menu.addSeparator()
-        self.markdown_menu.addAction(self.md_bullet_action)
-        self.markdown_menu.addAction(self.md_numbered_action)
-        self.markdown_menu.addAction(self.md_task_action)
-        self.markdown_menu.addAction(self.md_toggle_task_action)
-        self.markdown_menu.addAction(self.md_quote_action)
-        self.markdown_menu.addSeparator()
-        self.markdown_menu.addAction(self.md_link_action)
-        self.markdown_menu.addAction(self.md_image_action)
-        self.markdown_menu.addAction(self.md_table_action)
-        self.markdown_menu.addAction(self.md_hr_action)
-        self.markdown_menu.addSeparator()
-        self.markdown_menu.addAction(self.md_toggle_preview_action)
-        self.markdown_menu.addAction(self.md_toolbar_visible_action)
-
         # Plugins
         self.plugins_menu = menu_bar.addMenu("&Plugins")
         self.plugins_menu.addAction(self.plugin_manager_action)
@@ -3719,6 +3853,7 @@ class UiSetupMixin:
         self.help_menu.addAction(self.check_updates_action)
         self.help_menu.addSeparator()
         self.help_menu.addAction(self.show_debug_logs_action)
+        self.help_menu.addAction(self.open_source_licenses_action)
         self.help_menu.addSeparator()
         self.help_menu.addAction(self.about_action)
 
@@ -3862,6 +3997,7 @@ class UiSetupMixin:
         markdown_toolbar.addAction(self.italic_action)
         markdown_toolbar.addAction(self.underline_action)
         markdown_toolbar.addAction(self.strikethrough_action)
+        markdown_toolbar.addAction(self.text_size_selection_action)
         markdown_toolbar.addSeparator()
         markdown_toolbar.addAction(self.md_heading1_action)
         markdown_toolbar.addAction(self.md_heading2_action)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QObject, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QFontMetricsF
 from PySide6.QtWidgets import QTextEdit
 
 try:
@@ -288,6 +288,19 @@ class EditorWidget(QObject):
             self.widget.setWrapMode(QsciScintilla.WrapWord if enabled else QsciScintilla.WrapNone)
         else:
             self.widget.setLineWrapMode(QTextEdit.WidgetWidth if enabled else QTextEdit.NoWrap)
+
+    def configure_indentation(self, *, tab_width: int, use_tabs: bool) -> None:
+        width = max(1, int(tab_width))
+        if self._is_scintilla:
+            if hasattr(self.widget, "setTabWidth"):
+                self.widget.setTabWidth(width)
+            if hasattr(self.widget, "setIndentationWidth"):
+                self.widget.setIndentationWidth(width)
+            if hasattr(self.widget, "setIndentationsUseTabs"):
+                self.widget.setIndentationsUseTabs(bool(use_tabs))
+            return
+        metrics = QFontMetricsF(self.widget.font())
+        self.widget.setTabStopDistance(max(8.0, metrics.horizontalAdvance(" ") * float(width)))
 
     def zoom_in(self, steps: int) -> None:
         if self._is_scintilla:

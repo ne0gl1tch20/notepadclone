@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from .notepadpp_prefs import NPP_PREF_DEFAULTS
 
-DEFAULT_UPDATE_FEED_URL = "https://raw.githubusercontent.com/ne0gl1tch20/pypad/refs/heads/main/notepad.xml"
+DEFAULT_UPDATE_FEED_URL = "https://raw.githubusercontent.com/ne0gl1tch20/pypad/refs/heads/main/update.xml"
 
 
 def build_default_settings(*, default_style: str, font_family: str, font_size: int) -> dict:
-    return {
+    settings = {
         "settings_schema_version": 2,
         "app_style": default_style,
         "dark_mode": False,
@@ -132,6 +133,8 @@ def build_default_settings(*, default_style: str, font_family: str, font_size: i
         "template_packs": {},
         "gemini_api_key": "",
         "ai_model": "gemini-3-flash-preview",
+        "ai_app_knowledge_override": "",
+        "ai_personality_advanced": "",
         "ai_send_redact_emails": False,
         "ai_send_redact_paths": False,
         "ai_send_redact_tokens": True,
@@ -147,6 +150,14 @@ def build_default_settings(*, default_style: str, font_family: str, font_size: i
         "ai_last_prompt_app_name": "Pypad",
         "ai_rewrite_require_approval": True,
         "ai_verbose_logging": False,
+        "ai_apply_review_mode": "always_preview",
+        "ai_enable_regression_guard_prompts": True,
+        "ai_template_nearby_lines_radius": 20,
+        "ai_batch_refactor_max_selected_files": 20,
+        "ai_session_default_include_current_file_auto": False,
+        "ai_session_default_include_workspace_snippets_auto": False,
+        "ai_session_default_strict_citations_only": False,
+        "ai_session_default_allow_hidden_apply_commands": True,
         "update_feed_url": DEFAULT_UPDATE_FEED_URL,
         "auto_check_updates": True,
         "update_require_signed_metadata": False,
@@ -155,4 +166,7 @@ def build_default_settings(*, default_style: str, font_family: str, font_size: i
         "recovery_discard_after_days": 14,
         "debug_telemetry_enabled": False,
         "save_debug_logs_to_appdata": False,
+        "logging_level": "INFO",
     }
+    settings.update(NPP_PREF_DEFAULTS)
+    return settings

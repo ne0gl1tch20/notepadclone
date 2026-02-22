@@ -1,10 +1,11 @@
-from PySide6.QtCore import QPoint, Qt, QMimeData, Signal
-from PySide6.QtGui import QDrag, QColor, QPainter
-from PySide6.QtWidgets import QApplication, QTabBar, QToolButton
+﻿from PySide6.QtCore import QPoint, Qt, QMimeData, Signal
+from PySide6.QtGui import QDrag, QColor, QPainter, QIcon
+from PySide6.QtWidgets import QApplication, QHBoxLayout, QLabel, QTabBar, QToolButton, QWidget
 
 class DetachableTabBar(QTabBar):
     detach_requested = Signal(int, QPoint)
     _tab_mime_type = "application/x-pypad-tab"
+    _badge_size = 12
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -24,15 +25,51 @@ class DetachableTabBar(QTabBar):
         if index < 0:
             return
         existing = self.tabButton(index, QTabBar.RightSide)
-        if isinstance(existing, QToolButton):
-            existing.setAutoRaise(True)
-            existing.setToolTip("Close tab")
-            existing.setText("x")
-            existing.setToolButtonStyle(Qt.ToolButtonTextOnly)
-            existing.setStyleSheet("QToolButton { padding: 0px; margin: 0px; }")
-            existing.setFixedSize(14, 14)
+        pinned = self._tab_is_pinned(index)
+        favorite = self._tab_is_favorite(index)
+        if isinstance(existing, QWidget) and bool(existing.property("pypad_tab_right_container")):
+            pin_label = existing.findChild(QLabel, "pypadTabPinBadge")
+            favorite_label = existing.findChild(QLabel, "pypadTabFavoriteBadge")
+            close_btn = existing.findChild(QToolButton, "pypadTabCloseButton")
+            if close_btn is not None:
+                self._style_close_button(close_btn)
+            self._set_pin_badge(pin_label, pinned)
+            self._set_favorite_badge(favorite_label, favorite)
             return
-        button = QToolButton(self)
+        close_btn = existing if isinstance(existing, QToolButton) else None
+        if close_btn is None:
+            close_btn = QToolButton(self)
+            close_btn.clicked.connect(self._emit_close_from_button)
+        self._style_close_button(close_btn)
+        container = QWidget(self)
+        container.setProperty("pypad_tab_right_container", True)
+        container.setFixedHeight(14)
+        row = QHBoxLayout(container)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(2)
+        pin_label = QLabel(container)
+        pin_label.setObjectName("pypadTabPinBadge")
+        pin_label.setAlignment(Qt.AlignCenter)
+        pin_label.setFixedSize(self._badge_size, self._badge_size)
+        row.addWidget(pin_label, 0, Qt.AlignVCenter)
+        favorite_label = QLabel(container)
+        favorite_label.setObjectName("pypadTabFavoriteBadge")
+        favorite_label.setAlignment(Qt.AlignCenter)
+        favorite_label.setFixedSize(self._badge_size, self._badge_size)
+        row.addWidget(favorite_label, 0, Qt.AlignVCenter)
+        close_btn.setObjectName("pypadTabCloseButton")
+        row.addWidget(close_btn, 0, Qt.AlignVCenter)
+        # Reserve enough width for pin + favorite + close so tab text doesn't overlap.
+        container.setFixedWidth((self._badge_size * 2) + 14 + 6)
+        self._set_pin_badge(pin_label, pinned)
+        self._set_favorite_badge(favorite_label, favorite)
+        self.setTabButton(index, QTabBar.RightSide, container)
+
+    def refresh_tab_accessory(self, index: int) -> None:
+        self._install_close_button(index)
+
+    @staticmethod
+    def _style_close_button(button: QToolButton) -> None:
         button.setAutoRaise(True)
         button.setCursor(Qt.ArrowCursor)
         button.setToolTip("Close tab")
@@ -40,8 +77,77 @@ class DetachableTabBar(QTabBar):
         button.setToolButtonStyle(Qt.ToolButtonTextOnly)
         button.setStyleSheet("QToolButton { padding: 0px; margin: 0px; }")
         button.setFixedSize(14, 14)
-        button.clicked.connect(self._emit_close_from_button)
-        self.setTabButton(index, QTabBar.RightSide, button)
+
+    def _tab_is_pinned(self, index: int) -> bool:
+        tab = self._tab_obj(index)
+        return bool(getattr(tab, "pinned", False))
+
+    def _tab_is_favorite(self, index: int) -> bool:
+        tab = self._tab_obj(index)
+        return bool(getattr(tab, "favorite", False))
+
+    def _tab_obj(self, index: int):
+        tab_widget = self.parentWidget()
+        if tab_widget is None or not hasattr(tab_widget, "widget"):
+            return None
+        try:
+            return tab_widget.widget(index)
+        except Exception:
+            return None
+
+    def _set_pin_badge(self, label: QLabel | None, pinned: bool) -> None:
+        if label is None:
+            return
+        if not pinned:
+            label.clear()
+            label.setVisible(False)
+            label.setToolTip("")
+            return
+        icon = self._pin_badge_icon(size=self._badge_size)
+        pixmap = icon.pixmap(self._badge_size, self._badge_size)
+        if pixmap.isNull():
+            label.clear()
+            label.setVisible(False)
+            label.setToolTip("")
+            return
+        label.setPixmap(pixmap)
+        label.setVisible(True)
+        label.setToolTip("Pinned tab")
+
+    def _pin_badge_icon(self, size: int = 10):
+        return self._named_badge_icon("tab-pin", size=size)
+
+    def _set_favorite_badge(self, label: QLabel | None, favorite: bool) -> None:
+        if label is None:
+            return
+        if not favorite:
+            label.clear()
+            label.setVisible(False)
+            label.setToolTip("")
+            return
+        icon = self._favorite_badge_icon(size=self._badge_size)
+        pixmap = icon.pixmap(self._badge_size, self._badge_size)
+        if pixmap.isNull():
+            label.clear()
+            label.setVisible(False)
+            label.setToolTip("")
+            return
+        label.setPixmap(pixmap)
+        label.setVisible(True)
+        label.setToolTip("Favorite tab")
+
+    def _favorite_badge_icon(self, size: int = 10):
+        return self._named_badge_icon("tab-heart", size=size)
+
+    def _named_badge_icon(self, name: str, size: int = 10) -> QIcon:
+        host_window = self.window()
+        icon_fn = getattr(host_window, "_svg_icon_colored", None)
+        if callable(icon_fn):
+            try:
+                return icon_fn(name, size=size)
+            except Exception:
+                pass
+        return QIcon()
 
     def tabLayoutChange(self) -> None:  # type: ignore[override]
         super().tabLayoutChange()
@@ -171,5 +277,7 @@ class DetachableTabBar(QTabBar):
             show_fn(index, event.globalPos())
             return
         super().contextMenuEvent(event)
+
+
 
 

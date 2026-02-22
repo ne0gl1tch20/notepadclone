@@ -78,7 +78,10 @@ from ..document_authoring import PageLayoutConfig, build_layout_html
 from ..project_workflow import read_text_with_large_file_preview
 from ..document_fidelity import DocumentFidelityError, export_document_text, import_document_text
 from ..note_crypto import HEADER as ENCRYPTED_NOTE_HEADER
+from ...logging_utils import get_logger
+from .notepadpp_pref_runtime import apply_npp_print_preferences_to_page_layout
 
+_LOGGER = get_logger(__name__)
 
 
 class FileOpsMixin:
@@ -116,6 +119,7 @@ class FileOpsMixin:
         )
         if not path:
             return
+        _LOGGER.debug("file_open dialog selected path=%s", path)
         self.log_event("Info", f'Open requested: "{path}"')
         if not self._open_file_path(path):
             return
@@ -133,6 +137,14 @@ class FileOpsMixin:
         encoding = self._encoding_for_path(path)
         preview = None
         fast_open_enabled = bool(self.settings.get("large_file_fast_open_enabled", True))
+        _LOGGER.debug(
+            "_open_file_path start path=%s suffix=%s structured=%s encoding=%s fast_open=%s",
+            path,
+            suffix,
+            structured_import,
+            encoding,
+            fast_open_enabled,
+        )
         try:
             size_kb = int(Path(path).stat().st_size / 1024)
         except Exception:
@@ -157,6 +169,14 @@ class FileOpsMixin:
                 )
             except Exception:
                 preview = None
+                _LOGGER.exception("_open_file_path preview read failed path=%s", path)
+        _LOGGER.debug(
+            "_open_file_path pre-read path=%s size_kb=%s maybe_encrypted=%s preview_partial=%s",
+            path,
+            size_kb,
+            maybe_encrypted_payload,
+            bool(preview is not None and getattr(preview, "is_partial", False)),
+        )
         imported_markdown_mode = False
         try:
             if structured_import:
@@ -170,10 +190,12 @@ class FileOpsMixin:
             else:
                 text, encrypted, password = self._load_text_from_path(path, encoding=encoding)
         except DocumentFidelityError as e:
+            _LOGGER.debug("_open_file_path document fidelity error path=%s error=%s", path, e)
             self.log_event("Error", f'Open failed: "{path}" - {e}')
             QMessageBox.critical(self, "Import Failed", f"Could not import document:\n{e}")
             return False
         except Exception as e:  # noqa: BLE001
+            _LOGGER.exception("_open_file_path exception path=%s", path)
             self.log_event("Error", f'Open failed: "{path}" - {e}')
             QMessageBox.critical(self, "Error", f"Could not open file:\n{e}")
             return False
@@ -244,6 +266,14 @@ class FileOpsMixin:
                 "PDF imported as extracted text. Save to .md/.txt/.docx/.odt to keep edits.",
                 7000,
             )
+        _LOGGER.debug(
+            "_open_file_path complete path=%s tab_large=%s partial_preview=%s markdown_mode=%s encrypted=%s",
+            path,
+            bool(getattr(tab, "large_file", False)),
+            bool(getattr(tab, "partial_large_preview", False)),
+            bool(getattr(tab, "markdown_mode_enabled", False)),
+            bool(getattr(tab, "encryption_enabled", False)),
+        )
         return True
 
     def file_save(self) -> bool:
@@ -262,24 +292,19 @@ class FileOpsMixin:
             return False
         if tab.current_file is None:
             return self.file_save_as_tab(tab)
-        if tab.read_only:
-            ret = QMessageBox.question(
-                self,
-                "Read-Only File",
-                "This file is read-only. Disable read-only and save?",
-                QMessageBox.Yes | QMessageBox.No,
-            )
-            if ret != QMessageBox.Yes:
-                return False
-            if not self._set_file_read_only(tab.current_file, False):
-                QMessageBox.warning(self, "Read-Only", "Could not update read-only attribute.")
-                return False
-            tab.read_only = False
-            tab.text_edit.set_read_only(False)
         suffix = Path(tab.current_file).suffix.lower()
         structured_export = suffix in {".docx", ".odt", ".html", ".htm"}
+        _LOGGER.debug(
+            "file_save_tab start path=%s suffix=%s structured=%s encrypted=%s modified=%s",
+            tab.current_file,
+            suffix,
+            structured_export,
+            bool(getattr(tab, "encryption_enabled", False)),
+            bool(tab.text_edit.is_modified()),
+        )
         payload = self.security_controller.build_payload_for_save(tab)
         if payload is None:
+            _LOGGER.debug("file_save_tab aborted by security_controller path=%s", tab.current_file)
             return False
         if hasattr(self, "_emit_plugin_event"):
             save_mode = "export" if structured_export else "text"
@@ -304,10 +329,12 @@ class FileOpsMixin:
                 with open(tab.current_file, "w", encoding=encoding, errors="replace") as f:
                     f.write(payload)
         except DocumentFidelityError as e:
+            _LOGGER.debug("file_save_tab document fidelity error path=%s error=%s", tab.current_file, e)
             self.log_event("Error", f'Save failed: "{tab.current_file}" - {e}')
             QMessageBox.critical(self, "Save Failed", f"Could not export this format:\n{e}")
             return False
         except Exception as e:  # noqa: BLE001
+            _LOGGER.exception("file_save_tab exception path=%s", tab.current_file)
             self.log_event("Error", f'Save failed: "{tab.current_file}" - {e}')
             QMessageBox.critical(self, "Error", f"Could not save file:\n{e}")
             return False
@@ -322,6 +349,7 @@ class FileOpsMixin:
             self._persist_encoding_for_path(tab.current_file, tab.encoding or "utf-8")
             self._persist_eol_for_path(tab.current_file, tab.eol_mode or "LF")
         self._persist_file_metadata_for_tab(tab)
+        _LOGGER.debug("file_save_tab complete path=%s bytes=%d", tab.current_file, len(payload))
         self._add_recent_file(tab.current_file)
         self._clear_tab_autosave(tab)
         self.log_event("Info", f'Save succeeded: "{tab.current_file}"')
@@ -392,6 +420,12 @@ class FileOpsMixin:
         )
         if not path:
             return False
+        _LOGGER.debug(
+            "file_save_as_tab selected path=%s was_unsaved=%s previous_favorite=%s",
+            path,
+            was_unsaved,
+            previous_favorite,
+        )
         self.log_event("Info", f'Save As selected: "{path}"')
 
         tab.current_file = path
@@ -406,10 +440,19 @@ class FileOpsMixin:
         if path in set(self.settings.get("pinned_files", [])):
             tab.pinned = True
         self._apply_file_metadata_to_tab(tab)
+        # "Save As" should not force read-only mode onto the new file unless the user chooses it.
+        tab.read_only = False
+        tab.text_edit.set_read_only(False)
         if was_unsaved and previous_favorite:
             tab.favorite = True
         if was_unsaved and previous_tags:
             tab.tags = previous_tags
+        if tab.current_file:
+            self._persist_file_metadata_for_tab(tab)
+            if hasattr(self, "_refresh_recent_files_menu"):
+                self._refresh_recent_files_menu()
+            if hasattr(self, "save_settings_to_disk"):
+                self.save_settings_to_disk()
         self._refresh_tab_title(tab)
         if tab is self.active_tab():
             self.md_toggle_preview_action.blockSignals(True)
@@ -464,6 +507,7 @@ class FileOpsMixin:
         doc.setDefaultFont(print_font)
         text = tab.text_edit.get_text()
         page_cfg = PageLayoutConfig.from_settings(self.settings)
+        apply_npp_print_preferences_to_page_layout(self.settings, tab, page_cfg)
         use_layout_render = bool(
             self.settings.get("page_layout_view_enabled", False)
             or page_cfg.header_text.strip()

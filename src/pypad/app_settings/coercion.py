@@ -3,6 +3,7 @@ from __future__ import annotations
 from urllib.parse import urlsplit
 
 from .defaults import build_default_settings
+from .notepadpp_prefs import coerce_notepadpp_prefs
 
 def coerce_bool(value, default: bool = False) -> bool:
     if isinstance(value, bool):
@@ -56,6 +57,12 @@ def _coerce_hex(value: object, default: str) -> str:
     return text
 
 
+def _coerce_logging_level(value: object, default: str = "INFO") -> str:
+    allowed = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+    text = str(value or "").strip().upper()
+    return text if text in allowed else default
+
+
 def _sanitize_update_feed_url(value: object, default: str) -> str:
     raw = str(value or "").strip() or default
     if "neogl1tch20server" in raw or raw.endswith("/updates/notepad.xml"):
@@ -95,11 +102,14 @@ def migrate_settings(settings: dict) -> dict:
         current["ai_workspace_qa_max_lines_per_file"] = _coerce_int_clamped(
             current.get("ai_workspace_qa_max_lines_per_file", 60), 60, 10, 200
         )
+        current["ai_app_knowledge_override"] = str(current.get("ai_app_knowledge_override", "") or "")
+        current["ai_personality_advanced"] = str(current.get("ai_personality_advanced", "") or "")
         current["save_debug_logs_to_appdata"] = coerce_bool(current.get("save_debug_logs_to_appdata", False), False)
+        current["logging_level"] = _coerce_logging_level(current.get("logging_level", "INFO"))
         current["backup_output_dir"] = str(current.get("backup_output_dir", "") or "").strip()
         current["update_feed_url"] = _sanitize_update_feed_url(current.get("update_feed_url"), defaults.get("update_feed_url", ""))
         normalize_ui_visibility_settings(current)
-        return current
+        return coerce_notepadpp_prefs(current)
 
     for key, value in defaults.items():
         current.setdefault(key, value)
@@ -189,6 +199,8 @@ def migrate_settings(settings: dict) -> dict:
     current["ai_send_redact_emails"] = coerce_bool(current.get("ai_send_redact_emails", False), False)
     current["ai_send_redact_paths"] = coerce_bool(current.get("ai_send_redact_paths", False), False)
     current["ai_send_redact_tokens"] = coerce_bool(current.get("ai_send_redact_tokens", True), True)
+    current["ai_app_knowledge_override"] = str(current.get("ai_app_knowledge_override", "") or "")
+    current["ai_personality_advanced"] = str(current.get("ai_personality_advanced", "") or "")
     current["ai_preview_redacted_prompt"] = coerce_bool(current.get("ai_preview_redacted_prompt", True), True)
     current["ai_key_storage_mode"] = _coerce_enum(current.get("ai_key_storage_mode"), {"settings", "env_only"}, "settings")
     current["update_feed_url"] = _sanitize_update_feed_url(current.get("update_feed_url"), defaults.get("update_feed_url", ""))
@@ -229,8 +241,9 @@ def migrate_settings(settings: dict) -> dict:
     )
     current["debug_telemetry_enabled"] = coerce_bool(current.get("debug_telemetry_enabled", False), False)
     current["save_debug_logs_to_appdata"] = coerce_bool(current.get("save_debug_logs_to_appdata", False), False)
+    current["logging_level"] = _coerce_logging_level(current.get("logging_level", "INFO"))
     current["backup_output_dir"] = str(current.get("backup_output_dir", "") or "").strip()
     current["settings_schema_version"] = 2
 
     normalize_ui_visibility_settings(current)
-    return current
+    return coerce_notepadpp_prefs(current)

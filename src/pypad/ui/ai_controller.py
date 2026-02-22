@@ -24,6 +24,8 @@ from PySide6.QtWidgets import (
 )
 
 from .ai_edit_preview_dialog import AIEditPreviewDialog, AIRewritePromptDialog
+from ..ai_app_knowledge import DEFAULT_AI_APP_KNOWLEDGE
+from ..logging_utils import get_logger
 
 MISSING_API_KEY_MESSAGE = (
     "I don't have an API key! Do it in Settings > Preferences > AI and Updates > Gemini API Key! "
@@ -38,6 +40,8 @@ ASSIGNMENT_SECRET_RE = re.compile(
 )
 BEARER_TOKEN_RE = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._\-~+/=]{8,}\b")
 JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_\-]+?\.[A-Za-z0-9_\-]+?\.[A-Za-z0-9_\-]+?\b")
+
+_LOGGER = get_logger(__name__)
 
 
 def sanitize_prompt_text(prompt: str, settings: dict) -> tuple[str, list[str]]:
@@ -99,24 +103,32 @@ class _AIStreamWorker(QObject):
         self._cancel_requested = False
 
     def cancel(self) -> None:
+        _LOGGER.debug("AI stream worker cancel requested model=%s prompt_chars=%d", self.model, len(self.prompt))
         self._cancel_requested = True
 
     def run(self) -> None:
+        _LOGGER.debug("AI stream worker run start model=%s prompt_chars=%d", self.model, len(self.prompt))
         try:
             parts: list[str] = []
             for piece in _generate_stream(self.prompt, self.api_key, self.model):
                 if self._cancel_requested:
+                    _LOGGER.debug("AI stream worker run cancelled-before-emit chunks=%d chars=%d", len(parts), len("".join(parts)))
                     self.cancelled.emit("".join(parts).strip())
                     return
                 if not piece:
                     continue
                 parts.append(piece)
+                _LOGGER.debug("AI stream worker emit chunk chars=%d total_chunks=%d", len(piece), len(parts))
                 self.chunk.emit(piece)
                 if self._cancel_requested:
+                    _LOGGER.debug("AI stream worker run cancelled-after-emit chunks=%d chars=%d", len(parts), len("".join(parts)))
                     self.cancelled.emit("".join(parts).strip())
                     return
-            self.finished.emit("".join(parts).strip())
+            final_text = "".join(parts).strip()
+            _LOGGER.debug("AI stream worker finished chunks=%d chars=%d", len(parts), len(final_text))
+            self.finished.emit(final_text)
         except Exception as exc:  # noqa: BLE001
+            _LOGGER.exception("AI stream worker failed model=%s", self.model)
             self.failed.emit(str(exc))
 
 
@@ -155,7 +167,7 @@ def _generate_sync(prompt: str, api_key: str, model: str) -> str:
         pass
 
     raise RuntimeError(
-        "AI request failed. Install `google-genai` or `google-generativeai`, and verify model/API key."
+        "AI request failed. Check your connection and try again. It is possible that the rate limit has been exceeded or the model is unavailable. Please try again later."
     )
 
 
@@ -325,6 +337,64 @@ class AIController:
             "[/APP_METADATA]"
         )
 
+    def _build_app_knowledge_block(self) -> str:
+        knowledge = str(DEFAULT_AI_APP_KNOWLEDGE or "").strip()
+        if not knowledge:
+            return ""
+        return (
+            "[PYPAD_KNOWLEDGE]\n"
+            f"{knowledge}\n"
+            "[/PYPAD_KNOWLEDGE]"
+        )
+
+    def _build_user_knowledge_block(self) -> str:
+        # Keep built-in app knowledge intact; this field is user-appended guidance.
+        user_knowledge = str(self.window.settings.get("ai_app_knowledge_override", "") or "").strip()
+        if not user_knowledge:
+            return ""
+        return (
+            "[PYPAD_USER_KNOWLEDGE]\n"
+            f"{user_knowledge}\n"
+            "[/PYPAD_USER_KNOWLEDGE]"
+        )
+
+    def _build_advanced_personality_block(self) -> str:
+        personality = str(self.window.settings.get("ai_personality_advanced", "") or "").strip()
+        if not personality:
+            return ""
+        return (
+            "[PYPAD_AI_PERSONALITY_ADVANCED]\n"
+            f"{personality}\n"
+            "[/PYPAD_AI_PERSONALITY_ADVANCED]"
+        )
+
+    def _build_runtime_context_block(self) -> str:
+        tab = self.window.active_tab() if hasattr(self.window, "active_tab") else None
+        file_name = "Untitled"
+        is_markdown = False
+        has_selection = False
+        selection_preview = ""
+        if tab is not None:
+            file_name = str(getattr(tab, "current_file", "") or "Untitled")
+            is_markdown = bool(getattr(tab, "markdown_mode_enabled", False))
+            try:
+                has_selection = bool(tab.text_edit.has_selection())
+                if has_selection:
+                    selection_preview = str(tab.text_edit.selected_text() or "")[:500]
+            except Exception:
+                has_selection = False
+                selection_preview = ""
+        workspace_root = str(self.window.settings.get("workspace_root", "") or "").strip()
+        return (
+            "[APP_RUNTIME_CONTEXT]\n"
+            f"active_file={file_name}\n"
+            f"workspace_root={workspace_root or '(none)'}\n"
+            f"markdown_mode={'true' if is_markdown else 'false'}\n"
+            f"has_selection={'true' if has_selection else 'false'}\n"
+            f"selection_preview={selection_preview}\n"
+            "[/APP_RUNTIME_CONTEXT]"
+        )
+
     def _api_key(self) -> str:
         storage_mode = str(self.window.settings.get("ai_key_storage_mode", "settings") or "settings").strip().lower()
         configured = str(self.window.settings.get("gemini_api_key", "") or "").strip()
@@ -393,7 +463,15 @@ class AIController:
         self.window.settings["ai_last_prompt_app_name"] = app_name
         if hasattr(self.window, "save_settings_to_disk"):
             self.window.save_settings_to_disk()
-        candidate = f"{self._app_metadata_block}\n\n{candidate}"
+        blocks = [
+            self._app_metadata_block,
+            self._build_app_knowledge_block(),
+            self._build_user_knowledge_block(),
+            self._build_advanced_personality_block(),
+            self._build_runtime_context_block(),
+            candidate,
+        ]
+        candidate = "\n\n".join(part for part in blocks if str(part).strip())
         redacted, changes = sanitize_prompt_text(candidate, self.window.settings)
         if not changes:
             self._log_ai(
@@ -429,6 +507,8 @@ class AIController:
         on_done: Callable[[str], None],
         on_error: Callable[[str], None],
         on_cancel: Callable[[str], None] | None = None,
+        *,
+        debug_correlation_id: str | None = None,
     ) -> None:
         self._ai_request_counter += 1
         request_id = self._ai_request_counter
@@ -445,39 +525,117 @@ class AIController:
         self._log_ai(
             f"stream start action={action_name!r} id={request_id} model={model!r} prompt_chars={len(prepared_prompt)}"
         )
+        _LOGGER.debug(
+            "AIController stream start action=%r id=%d cid=%r model=%r prompt_chars=%d on_cancel=%s",
+            action_name,
+            request_id,
+            debug_correlation_id,
+            model,
+            len(prepared_prompt),
+            on_cancel is not None,
+        )
 
         thread = QThread(self.window)
         worker = _AIStreamWorker(prepared_prompt, api_key, model)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
-        worker.chunk.connect(on_chunk)
+
+        def _run_ui(action: Callable[[], None]) -> None:
+            # Stream worker signals are connected to Python callables; without an explicit
+            # receiver object Qt may invoke them on the worker thread. Marshal to UI thread.
+            QTimer.singleShot(0, self.window, action)
+
+        def _dispatch_chunk(piece: str) -> None:
+            def _apply() -> None:
+                _LOGGER.debug(
+                    "AIController stream callback on_chunk action=%r id=%d chars=%d",
+                    action_name,
+                    request_id,
+                    len(piece or ""),
+                )
+                if debug_correlation_id:
+                    _LOGGER.debug("AIController stream callback on_chunk cid=%r", debug_correlation_id)
+                on_chunk(piece)
+
+            _run_ui(_apply)
+
+        def _dispatch_done(text: str) -> None:
+            def _apply() -> None:
+                _LOGGER.debug(
+                    "AIController stream callback on_done action=%r id=%d cid=%r chars=%d",
+                    action_name,
+                    request_id,
+                    debug_correlation_id,
+                    len(text or ""),
+                )
+                on_done(text)
+
+            _run_ui(_apply)
+
+        def _dispatch_error(message: str) -> None:
+            def _apply() -> None:
+                _LOGGER.debug(
+                    "AIController stream callback on_error action=%r id=%d cid=%r message_len=%d",
+                    action_name,
+                    request_id,
+                    debug_correlation_id,
+                    len(message or ""),
+                )
+                on_error(message)
+
+            _run_ui(_apply)
+
+        worker.chunk.connect(_dispatch_chunk)
         worker.chunk.connect(
-            lambda piece: self._log_ai(
-                f"stream chunk action={action_name!r} id={request_id} chars={len(piece)}"
-            )
-        )
-        worker.finished.connect(
-            lambda text: self._record_ai_metrics(action=action_name, prompt=prepared_prompt, response=text, model=model)
-        )
-        worker.finished.connect(
-            lambda text: self._log_ai(
-                f"stream finished action={action_name!r} id={request_id} chars={len(text)}"
-            )
-        )
-        worker.finished.connect(on_done)
-        worker.failed.connect(
-            lambda message: self._log_ai(
-                f"stream failed action={action_name!r} id={request_id} error={message!r}"
-            )
-        )
-        worker.failed.connect(on_error)
-        if on_cancel is not None:
-            worker.cancelled.connect(
-                lambda text: self._log_ai(
-                    f"stream cancelled action={action_name!r} id={request_id} chars={len(text)}"
+            lambda piece: _run_ui(
+                lambda piece=piece: self._log_ai(
+                    f"stream chunk action={action_name!r} id={request_id} chars={len(piece)}"
                 )
             )
-            worker.cancelled.connect(on_cancel)
+        )
+        worker.finished.connect(
+            lambda text: _run_ui(
+                lambda text=text: self._record_ai_metrics(action=action_name, prompt=prepared_prompt, response=text, model=model)
+            )
+        )
+        worker.finished.connect(
+            lambda text: _run_ui(
+                lambda text=text: self._log_ai(
+                    f"stream finished action={action_name!r} id={request_id} chars={len(text)}"
+                )
+            )
+        )
+        worker.finished.connect(_dispatch_done)
+        worker.failed.connect(
+            lambda message: _run_ui(
+                lambda message=message: self._log_ai(
+                    f"stream failed action={action_name!r} id={request_id} error={message!r}"
+                )
+            )
+        )
+        worker.failed.connect(_dispatch_error)
+        if on_cancel is not None:
+            def _dispatch_cancel(text: str) -> None:
+                def _apply() -> None:
+                    _LOGGER.debug(
+                        "AIController stream callback on_cancel action=%r id=%d cid=%r chars=%d",
+                        action_name,
+                        request_id,
+                        debug_correlation_id,
+                        len(text or ""),
+                    )
+                    on_cancel(text)
+
+                _run_ui(_apply)
+
+            worker.cancelled.connect(
+                lambda text: _run_ui(
+                    lambda text=text: self._log_ai(
+                        f"stream cancelled action={action_name!r} id={request_id} chars={len(text)}"
+                    )
+                )
+            )
+            worker.cancelled.connect(_dispatch_cancel)
         worker.finished.connect(thread.quit)
         worker.cancelled.connect(thread.quit)
         worker.failed.connect(thread.quit)
@@ -487,6 +645,7 @@ class AIController:
         self._active_stream_worker = worker
         self._active_stream_thread = thread
         self.window.show_status_message(f"AI generating ({model})...", 0)
+        _LOGGER.debug("AIController stream thread start action=%r id=%d cid=%r", action_name, request_id, debug_correlation_id)
         thread.start()
 
     def _insert_generated_text(self, text: str) -> bool:
@@ -761,15 +920,33 @@ class AIController:
         on_done: Callable[[str], None],
         on_error: Callable[[str], None],
         on_cancel: Callable[[str], None] | None = None,
+        *,
+        debug_correlation_id: str | None = None,
     ) -> None:
         if self._guard_ai_private_mode("AI Chat"):
             return
-        self._start_stream_generation(prompt, "AI Chat", on_chunk, on_done, on_error, on_cancel=on_cancel)
+        _LOGGER.debug(
+            "AIController.ask_ai_chat prompt_chars=%d on_cancel=%s cid=%r",
+            len(prompt or ""),
+            on_cancel is not None,
+            debug_correlation_id,
+        )
+        self._start_stream_generation(
+            prompt,
+            "AI Chat",
+            on_chunk,
+            on_done,
+            on_error,
+            on_cancel=on_cancel,
+            debug_correlation_id=debug_correlation_id,
+        )
 
     def cancel_active_chat_request(self) -> bool:
         if self._active_stream_worker is None:
+            _LOGGER.debug("AIController.cancel_active_chat_request no active stream")
             return False
         self._log_ai("cancel requested for active stream")
+        _LOGGER.debug("AIController.cancel_active_chat_request dispatching cancel to active worker")
         self._active_stream_worker.cancel()
         self.window.show_status_message("AI generation cancel requested.", 2000)
         return True

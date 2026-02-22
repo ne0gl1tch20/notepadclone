@@ -26,6 +26,10 @@ if str(ROOT) not in sys.path:
 
 from pypad.app import main
 from pypad.app_settings import get_crash_logs_file_path
+from pypad.logging_utils import configure_app_logging, get_logger
+
+configure_app_logging("INFO")
+LOGGER = get_logger(__name__)
 
 
 def _build_shell_open_command() -> str:
@@ -91,7 +95,7 @@ def _save_startup_traceback(traceback_text: str) -> None:
 
 
 def _startup_log(message: str) -> None:
-    print(message, flush=True)
+    LOGGER.info(message)
     _save_startup_traceback(f"[Startup] {message}")
 
 
@@ -156,6 +160,7 @@ if __name__ == "__main__":
         help="Remove 'Open with Pypad' from File Explorer context menu (current user).",
     )
     parsed_args, qt_args = parser.parse_known_args(sys.argv[1:])
+    LOGGER.debug("Parsed startup args: parsed=%s qt=%s", parsed_args, qt_args)
 
     if parsed_args.register_shell_menu and parsed_args.unregister_shell_menu:
         print("Choose either --register-shell-menu or --unregister-shell-menu, not both.")
@@ -178,16 +183,19 @@ if __name__ == "__main__":
         sys.exit(0)
 
     _install_startup_exception_hooks()
+    LOGGER.info("Startup exception hooks installed")
     atexit.register(lambda: _startup_log("Process exiting (atexit)."))
     startup_started_at = perf_counter()
     startup_reported = [False]
     app = QApplication([sys.argv[0], *qt_args])
+    LOGGER.info("QApplication created")
     # Closing the main window should terminate the app process.
     app.setQuitOnLastWindowClosed(True)
 
     # Load splash image
     splash_path = resource_path("assets/splash.png")
     pixmap = QPixmap(splash_path)
+    LOGGER.debug("Loaded splash pixmap from %s", splash_path)
     pixmap = pixmap.scaled(
         600,
         400,
@@ -202,12 +210,14 @@ if __name__ == "__main__":
             version = f.read().strip()
     except FileNotFoundError:
         version = "v?.?.?"  # fallback
+        LOGGER.warning("Version file not found: %s", version_file)
     _startup_log(f"Pypad, Version: {version}")
     _startup_log("Waiting for main_window to start...")
 
     # Load custom font
     font_path = resource_path("assets/splash.ttf")
     font_id = QFontDatabase.addApplicationFont(font_path)
+    LOGGER.debug("Splash font load attempted from %s (font_id=%s)", font_path, font_id)
 
     if font_id == -1:
         print(f"Warning: Failed to load font at {font_path}, using default font.")
@@ -249,33 +259,23 @@ if __name__ == "__main__":
 
     # Start main window after short delay
     def start_main():
+        LOGGER.info("Launching main window bootstrap")
         try:
             window = main(existing_app=app)
         except Exception:
             trace_text = traceback.format_exc()
             _save_startup_traceback(trace_text)
-            print(trace_text)
+            LOGGER.exception("Main window bootstrap failed")
             app.quit()
             return
         if window is None:
+            LOGGER.warning("main() returned None; quitting app")
             app.quit()
             return
         # Keep a strong reference so Qt doesn't destroy the window.
         global _MAIN_WINDOW
         _MAIN_WINDOW = window
-        mark_app_started(window)
-        try:
-            if window.isMinimized():
-                window.showNormal()
-            window.setWindowState(window.windowState() & ~Qt.WindowState.WindowMinimized)
-            window.setVisible(True)
-            window.show()
-            window.raise_()
-            window.activateWindow()
-        except Exception as exc:
-            _startup_log(f"Warning: failed to raise/activate main window: {exc}")
-
-        # Diagnostics for unexpected exits
+        # Diagnostics for unexpected exits (connect before showing in case startup quits immediately)
         def _log_quit(reason: str) -> None:
             _startup_log(f"App quitting ({reason})")
 
@@ -285,6 +285,40 @@ if __name__ == "__main__":
         # Make sure app exits cleanly when main window closes
         window.destroyed.connect(lambda: _log_quit("main window destroyed"))
         window.destroyed.connect(app.quit)
+
+        try:
+            _startup_log("[Startup] Showing main window...")
+            if window.isMinimized():
+                window.showNormal()
+            else:
+                window.show()
+            window.setWindowState(window.windowState() & ~Qt.WindowState.WindowMinimized)
+            _startup_log(
+                f"[Startup] Main window shown: visible={window.isVisible()} minimized={window.isMinimized()}"
+            )
+            if getattr(window, "_layout_restore_pending_after_show", False):
+                _startup_log("[Startup] Applying deferred layout restore...")
+                window._layout_restore_pending_after_show = False
+                try:
+                    if hasattr(window, "_restore_layout_from_settings"):
+                        window._restore_layout_from_settings()
+                except Exception as exc:
+                    _startup_log(f"Warning: deferred layout restore failed: {exc}")
+            mark_app_started(window)
+            # Defer native activation calls; they can be fragile during first show on some setups.
+            def _activate_main_window() -> None:
+                try:
+                    if not window.isVisible():
+                        window.show()
+                    _startup_log("[Startup] Activating main window...")
+                    window.raise_()
+                    window.activateWindow()
+                except Exception as exc:
+                    _startup_log(f"Warning: failed to raise/activate main window: {exc}")
+            QTimer.singleShot(0, _activate_main_window)
+            QTimer.singleShot(0, window.enforce_privacy_lock)
+        except Exception as exc:
+            _startup_log(f"Warning: failed to show main window: {exc}")
 
         def _check_window_visibility() -> None:
             try:

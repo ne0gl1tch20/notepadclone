@@ -1,90 +1,135 @@
 # Context Summary
 
 ## Docs Updated
-- Last docs sync: 2026-02-17
-- Synced files: `CHANGELOG.md`, `APP_SUMMARY.md`, `CONTEXT_SUMMARY.md`
+- Last docs sync: 2026-02-22
+- Synced file: `CONTEXT_SUMMARY.md`
 
 ## Current Focus
-- You are building a Notepad++-style editor clone in PySide6.
-- Recent work has focused on AI UX, localization, tab lifecycle UX, icon theming consistency, and regression tests.
+- PyPad (`src/pypad`) desktop editor UX and AI workflow integration.
+- Recent work focused on Settings/Preferences unification (PyPad + N++ compatibility), runtime settings hooks, logging/diagnostics, and AI chat instrumentation/UI polish.
 
 ## Latest Completed Changes
-- Added AI chat dock panel on the left:
-  - Ask AI opens/focuses panel.
-  - Message bubbles with live generation streaming.
-  - Cancel/Stop in-flight generation.
-  - Per-message Copy + Insert-to-tab actions.
-  - Chat history persistence in settings (`ai_chat_history`).
-- Added explicit missing API key guidance message with settings path and API key URL.
-- AI explain-selection prompt now uses:
-  - `Explain this text: {selection}`
-- Added runtime translation infrastructure:
-  - Google Translate-backed translation helper.
-  - On-disk translation cache + clear-cache action.
-  - Broader menu/action/widget/status translation coverage.
-- Moved app preference commands to a top-level `Settings` menu:
-  - `Preferences...` (renamed from Settings)
-  - `Shortcut Mapper...`
-- Removed `Generate Text to Tab` from AI actions/menu.
-- Added AI and updater unit tests.
-- Updated app/context summary docs.
-- Updated tab-close UX:
-  - Tabs remain draggable/detachable.
-  - Closing the last tab now shows an empty-state prompt instead of auto-creating a new tab:
-    - `You don't have any tabs ;( Just click File > New!`
-- Enforced semantic SVG icon coloring by theme:
-  - Light mode: black icons (`#000000`)
-  - Dark mode: white icons (`#ffffff`)
-  - Applied to both main-window SVG icons and AI panel SVG icons.
-- Fixed theme consistency regressions:
-  - Search toolbar controls now follow active theme colors.
-  - Status-bar language combo now follows active theme colors.
-  - AI chat dock now uses effective dark/light detection to avoid mixed-mode rendering.
-- Updated Preferences dialog theming for consistent dark/light appearance across panels, inputs, lists, and buttons.
-- Accent color preview now applies dialog theme updates live immediately when accent is picked or cleared.
-- Fixed icon-loading and rendering regressions:
-  - Corrected dev asset-root resolution to load from `assets/`.
-  - Added missing SVG toolbar icons to remove placeholder/paper icons.
-  - Fixed tab close icon color in light mode via explicit light/dark icon assets.
-  - Fixed SVG monochrome recolor pipeline so icons no longer render blank.
-- Updated version/changelog:
-  - `assets/version.txt` now `1.6.5-prerelease`
-  - `CHANGELOG.md` includes `1.6.5-prerelease` entry.
-- Added dedicated top-level `Search` menu and moved/expanded search workflows:
-  - Notepad++-style find variants, Go To, Mark, Change History, style/copy-styled actions
-  - Extended bookmark line operations in Search -> Bookmark
-- Expanded `View` menu substantially with Notepad++-style entries:
-  - Always on Top, Post-it, Distraction Free
-  - View Current File in, Show Symbol submenu, Fold/Unfold level controls
-  - Project panel shortcuts and text direction RTL/LTR
-- Implemented true Scintilla line hiding:
-  - `Hide Lines` now hides selected/current lines via Scintilla
-  - `Show Hidden Lines` restores hidden lines
+- Logging and diagnostics overhaul:
+  - centralized logging configuration with user-selectable global logging level in Preferences
+  - process-wide console capture added to Debug Logs dialog (root logger + stdout/stderr)
+  - verbose DEBUG instrumentation added across AI controller/chat, updater, autosave, and file operations
+  - AI chat response correlation IDs (`cid`) thread stream -> parse -> hidden command apply confirmation logs
+
+- AI Chat panel UX and tracing improvements:
+  - OpenAI-style attachment chips above prompt input (icon + file name + remove button)
+  - attachment chips wrap onto multiple lines in narrow dock widths
+  - hidden command extraction / apply-preview / deep-link handling have detailed DEBUG traces
+  - `ai_verbose_logging` user-facing messages include `cid` when available
+
+- Editor right-click context menu upgrade:
+  - rich Notepad++-inspired menu with AI and PyPad submenus
+  - quick AI row (`Explain`, `Rewrite`, `Attach`, `More AI...`)
+  - SVG icons, style submenu with swatches, native edit action ordering, dynamic submenu hiding
+
+- Preferences / settings overhaul (PyPad + N++ compatibility):
+  - large set of Notepad++-style compatibility pages added and persisted
+  - settings nav redesigned with mixed PyPad/N++ grouping, scope filters, page header card, search/tooltips
+  - N++ dark mode page merged into PyPad `Appearance` as embedded compatibility section
+  - content layout refined (non-stretch controls, fixed max width, left-aligned content, wider nav, forced nav scrollbar)
+  - additional Notepad++-vibe pass: tighter nav rows, subtle `PyPad Core` / `N++ Compatibility` separators, fixed-width form labels
+
+- N++ compatibility runtime hooks added:
+  - new-document encoding/EOL defaults applied on tab creation
+  - indentation defaults + per-language overrides applied at runtime (new tabs and settings apply)
+  - print margins and header/footer template settings applied during print/preview
+  - AI chat external clickable links filtered by allowed URI schemes from settings
+
+- Per-language indentation override table improvements:
+  - editable language dropdown (pre-populated + custom text allowed)
+  - inline validation coloring/tooltips (empty/duplicate language rows)
+  - save/apply blocked on invalid rows, with dialog and auto-focus on first invalid row
+
+- Dialog theming consistency:
+  - `Recover Unsaved Notes` dialog synced to app dark/light + accent theme
+  - startup recovery dialog now appears in taskbar correctly (top-level when main window hidden)
+  - reusable global dialog theme filter added for utility dialogs and quick prompts
+
+- AI file actions now route through AI Chat panel and hidden commands (instead of direct modal-only flows in several paths):
+  - hidden full-file apply command support added (`PYPAD_CMD_SET_FILE_*`)
+  - local yes/no confirm flow applies full file replacement in the current tab
+  - file-oriented AI actions use chat prompts that request hidden apply commands
+- AI built-in knowledge updated to document hidden commands:
+  - insert offer (`PYPAD_CMD_OFFER_INSERT_*`)
+  - full file replace (`PYPAD_CMD_SET_FILE_*`)
+  - chat title set (`PYPAD_CMD_SET_CHAT_TITLE_*`)
+- AI menu labels/tooltips updated to reflect "AI Chat Apply" behavior.
+
+- AI Chat panel upgraded substantially:
+  - separate saved chat sessions (`ai_chat_sessions`, `ai_chat_active_session_id`)
+  - `Start` menu with:
+    - New chat
+    - Rename / Pin / Archive / Delete
+    - Add current chat to project
+    - saved/archived chat switching
+  - embedded live filter inside `Start` menu (`Filter chats...`)
+  - dialog search (`Search Chats...`) still present
+  - chat transcript export to workspace (`.pypad_ai_chats/*.md`)
+  - per-panel model button (`Model: ...`) to change `ai_model`
+
+- Chat title behavior changed:
+  - no longer set from first user prompt
+  - no visible-response parsing heuristics for title
+  - title is set by separate hidden title command only (`PYPAD_CMD_SET_CHAT_TITLE_*`)
+  - local silent fallback added:
+    - if first assistant response lacks title command, app makes a silent follow-up AI call asking only for a hidden title command
+  - defensive base64 decoding added in title apply path to avoid raw base64 appearing as title
+
+- AI chat rendering/parsing fixes:
+  - safer `pypad://` link rendering via placeholder replacement after markdown->HTML conversion
+  - normalized `pypad://` URLs to strip trailing markdown punctuation/emphasis (e.g. `**`)
+  - hidden command parsing extended and hardened
+
+- AI chat UI polish:
+  - dedicated `ai-clear.svg` added and wired to Clear button
+  - assistant bubbles use UI sans-serif font (less editor-like)
+  - tighter list/paragraph spacing in assistant messages
+  - session title label restyled to not look like an input field
+  - clear/send/stop button icon setup unified
+
+- Preferences / settings:
+  - modern `Settings > Preferences > Layout` now exposes:
+    - `Enable autosave (draft recovery)`
+    - `Autosave interval (sec)`
+  - existing `autosave_enabled` / `autosave_interval_sec` settings keys used
+
+- Editor state sync:
+  - active tab modified flag now syncs with on-disk file content:
+    - file text matches buffer => marked saved
+    - differs => marked unsaved
+  - skipped for encrypted notes and partial large-file previews
 
 ## Key Architecture (Current)
 - Main window class:
-  - `src/notepadclone/ui/main_window/window.py` (`Notepad`)
+  - `src/pypad/ui/main_window/window.py` (`Notepad`)
 - Mixins:
-  - `ui_setup.py`, `file_ops.py`, `edit_ops.py`, `view_ops.py`, `misc.py`
+  - `src/pypad/ui/main_window/ui_setup.py`
+  - `src/pypad/ui/main_window/file_ops.py`
+  - `src/pypad/ui/main_window/edit_ops.py`
+  - `src/pypad/ui/main_window/view_ops.py`
+  - `src/pypad/ui/main_window/misc.py`
 - Settings system:
-  - `src/notepadclone/ui/main_window/settings_dialog.py`
-  - `src/notepadclone/app_settings/defaults.py`
-  - `src/notepadclone/app_settings/coercion.py` (schema migration/coercion)
+  - `src/pypad/ui/main_window/settings_dialog.py`
+  - `src/pypad/app_settings/defaults.py`
+  - `src/pypad/app_settings/coercion.py`
 - AI system:
-  - `src/notepadclone/ui/ai_controller.py`
-  - `src/notepadclone/ui/ai_chat_dock.py`
-- Localization:
-  - `src/notepadclone/i18n/translator.py`
+  - `src/pypad/ui/ai_controller.py`
+  - `src/pypad/ui/ai_chat_dock.py`
+  - `src/pypad/ai_app_knowledge.py`
 - Entry points:
-  - `src/run.py` (splash/startup logs/timing)
-  - `src/notepadclone/app.py` (app bootstrap + global exception hook)
+  - `src/run.py`
+  - `src/pypad/app.py`
 
 ## Packaging and Build
 - Build script: `compile.bat`
 - PyInstaller spec: `run.spec`
-- Dist output expected in `dist/`
+- Dist output: `dist/` (expected)
 
-## Tests Present
+## Tests Present (selected)
 - `tests/test_settings_migration.py`
 - `tests/test_settings_dialog_mapping.py`
 - `tests/test_settings_apply_runtime.py`
@@ -92,31 +137,42 @@
 - `tests/test_ai_controller.py`
 - `tests/test_updater_controller.py`
 
-## Open Tabs / Working Files (from latest context)
-- `src/run.py`
-- `CHANGELOG.md`
-- `src/notepadclone/ui/ai_controller.py`
-- `assets/version.txt`
+## Current Working Context
+- Active file lately: `src/run.py`
+- Most recent implementation work concentrated in:
+  - `src/pypad/ui/ai_chat_dock.py`
+  - `src/pypad/ui/ai_controller.py`
+  - `src/pypad/logging_utils.py`
+  - `src/pypad/ui/autosave.py`
+  - `src/pypad/ui/dialog_theme.py`
+  - `src/pypad/ui/main_window/misc.py`
+  - `src/pypad/ui/main_window/ui_setup.py`
+  - `src/pypad/ui/main_window/settings_dialog.py`
+  - `src/pypad/ui/main_window/settings_notepadpp_pages.py`
+  - `src/pypad/ui/main_window/notepadpp_pref_runtime.py`
+  - `src/pypad/app_settings/notepadpp_prefs.py`
+  - `src/pypad/ai_app_knowledge.py`
+  - `src/pypad/ui/icons/ai-clear.svg`
 
 ## Next Easy Resume Point
-1. Launch app and verify AI chat panel UX end-to-end:
-   - Ask AI opens panel.
-   - Streaming tokens render as Markdown.
-   - Stop/Cancel works.
-   - Copy/Insert bubble actions work.
-2. Verify tab lifecycle UX:
-   - Last tab closed -> empty-state screen appears.
-   - File > New returns from empty state to normal tab view.
-3. Verify icon theming:
-   - Light mode SVG icons render black.
-   - Dark mode SVG icons render white.
-4. Verify toolbar/menu icon coverage:
-   - No placeholder/paper icons remain.
-   - No blank SVG icons under either theme.
-5. Verify Preferences accent color behavior:
-   - Picking/clearing Accent color updates the dialog theme immediately without reopening.
-6. Run full test suite and add any missing UI tests for chat panel and empty-state behavior.
+1. Visual QA `Settings > Preferences` on dark and light themes:
+   - nav separators (`PyPad Core`, `N++ Compatibility`) render cleanly
+   - tighter nav rows do not clip emoji labels
+   - fixed-width form labels align rows across major pages
+2. Verify N++ compatibility runtime hooks:
+   - new tab uses configured encoding/EOL defaults
+   - indentation overrides apply per language on new/open tabs
+   - print preview reflects header/footer template and margins
+3. Verify AI chat external link filtering:
+   - allowed schemes open
+   - blocked schemes are prevented with message
+4. Verify recovery and utility dialogs:
+   - startup recovery dialog appears in taskbar
+   - dark/light theming applies consistently to common prompts/dialogs
+5. Verify DEBUG logs workflow:
+   - set logging level to `DEBUG`
+   - confirm process-wide console capture appears in Debug Logs dialog
 
-If QScintilla is unavailable, the editor falls back to `QTextEdit`; advanced Scintilla-only features are gated accordingly and we use methods for a sinctilla look.
-
-Every time you add a new svg, make any script support it for both dark and light mode.
+Notes:
+- If QScintilla is unavailable, editor falls back to `QTextEdit`; Scintilla-only features remain gated.
+- When adding new SVG icons, ensure they work with the AI/main-window monochrome recolor pipeline in both light and dark themes.

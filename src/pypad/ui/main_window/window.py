@@ -174,10 +174,14 @@ class Notepad(UiSetupMixin, FileOpsMixin, EditOpsMixin, ViewOpsMixin, MiscMixin,
 
         # Simple in-memory settings
         self.settings: dict = self._build_default_settings()
+        if hasattr(self, "apply_logging_preferences"):
+            self.apply_logging_preferences()
         self.log_event("Info", "[Startup] Default settings created")
         self._easter_egg_running = False
         self.settings_file = self._get_settings_file_path()
         self.load_settings_from_disk()
+        if hasattr(self, "apply_logging_preferences"):
+            self.apply_logging_preferences()
         self.log_event("Info", f"[Startup] Settings loaded from: {self.settings_file}")
         self._page_layout_view_enabled = bool(self.settings.get("page_layout_view_enabled", False))
         _mark_startup_stage("settings_loaded")

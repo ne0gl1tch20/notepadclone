@@ -17,7 +17,10 @@ from PySide6.QtCore import QObject, QThread, Signal, Qt, QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox, QProgressDialog
 
 from ..app_settings.defaults import DEFAULT_UPDATE_FEED_URL
+from ..logging_utils import get_logger
 from .updater_helpers import UpdateInfo, is_newer_version, parse_update_feed, verify_metadata_signature
+
+_LOGGER = get_logger(__name__)
 
 def _read_app_version() -> str:
     app_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[3]))
@@ -45,6 +48,7 @@ class _UpdateCheckWorker(QObject):
         self.feed_url = feed_url
 
     def run(self) -> None:
+        _LOGGER.debug("UpdateCheckWorker.run start feed_url=%s", self.feed_url)
         self.status.emit(f"Worker started for feed: {self.feed_url}")
         try:
             self.status.emit("Opening update feed URL...")
@@ -54,6 +58,7 @@ class _UpdateCheckWorker(QObject):
                 xml_text = response.read().decode("utf-8", errors="replace")
                 self.status.emit(f"Feed body read: {len(xml_text)} chars")
         except (TimeoutError, socket.timeout):
+            _LOGGER.debug("UpdateCheckWorker.run timeout feed_url=%s", self.feed_url)
             self.status.emit("Worker timeout while checking feed.")
             self.failed.emit(
                 f"Network timeout while checking updates (>{CHECK_TIMEOUT_SEC}s).\n"
@@ -61,6 +66,7 @@ class _UpdateCheckWorker(QObject):
             )
             return
         except URLError as exc:
+            _LOGGER.debug("UpdateCheckWorker.run URLError feed_url=%s error=%r", self.feed_url, exc)
             self.status.emit(f"Worker URLError while checking feed: {exc}")
             if isinstance(getattr(exc, "reason", None), socket.timeout):
                 self.failed.emit(
@@ -71,11 +77,13 @@ class _UpdateCheckWorker(QObject):
             self.failed.emit(str(exc))
             return
         except Exception as exc:  # noqa: BLE001
+            _LOGGER.exception("UpdateCheckWorker.run exception feed_url=%s", self.feed_url)
             self.status.emit(f"Worker exception while checking feed: {exc}")
             self.failed.emit(str(exc))
             return
         self.status.emit("Parsing update feed payload...")
         info = parse_update_feed(xml_text)
+        _LOGGER.debug("UpdateCheckWorker.run parsed feed_url=%s metadata=%s", self.feed_url, info is not None)
         self.status.emit(f"Parser result: {'metadata found' if info is not None else 'no metadata'}")
         self.finished.emit(info)
 
@@ -91,6 +99,7 @@ class _UpdateDownloadWorker(QObject):
         self.destination = destination
 
     def run(self) -> None:
+        _LOGGER.debug("UpdateDownloadWorker.run start url=%s dest=%s", self.download_url, self.destination)
         self.status.emit(f"Worker started for download: {self.download_url}")
         try:
             self.status.emit("Opening download URL...")
@@ -102,10 +111,12 @@ class _UpdateDownloadWorker(QObject):
             self.status.emit(f"Writing file to: {self.destination}")
             Path(self.destination).write_bytes(data)
         except (TimeoutError, socket.timeout):
+            _LOGGER.debug("UpdateDownloadWorker.run timeout url=%s", self.download_url)
             self.status.emit("Worker timeout while downloading update.")
             self.failed.emit(f"Network timeout while downloading update (>{DOWNLOAD_TIMEOUT_SEC}s).")
             return
         except URLError as exc:
+            _LOGGER.debug("UpdateDownloadWorker.run URLError url=%s error=%r", self.download_url, exc)
             self.status.emit(f"Worker URLError while downloading update: {exc}")
             if isinstance(getattr(exc, "reason", None), socket.timeout):
                 self.failed.emit(f"Network timeout while downloading update (>{DOWNLOAD_TIMEOUT_SEC}s).")
@@ -113,10 +124,12 @@ class _UpdateDownloadWorker(QObject):
             self.failed.emit(str(exc))
             return
         except Exception as exc:  # noqa: BLE001
+            _LOGGER.exception("UpdateDownloadWorker.run exception url=%s dest=%s", self.download_url, self.destination)
             self.status.emit(f"Worker exception while downloading update: {exc}")
             self.failed.emit(str(exc))
             return
         self.status.emit("Download worker finished successfully.")
+        _LOGGER.debug("UpdateDownloadWorker.run complete dest=%s", self.destination)
         self.finished.emit(self.destination)
 
 
@@ -146,8 +159,10 @@ class UpdaterController(QObject):
         pending_state = self._pending_capsule_state_text()
         self._log_update(f"Pending update capsule state: {pending_state}")
         print(f"[Updater] Pending update capsule state: {pending_state}")
+        _LOGGER.debug("UpdaterController initialized pending_state=%s", pending_state)
 
     def _log_update(self, message: str) -> None:
+        _LOGGER.debug("UpdaterController event: %s", message)
         if hasattr(self.window, "log_event"):
             try:
                 self.window.log_event("Info", f"[Updater] {message}")
@@ -157,6 +172,7 @@ class UpdaterController(QObject):
         print(f"[Updater] {message}")
 
     def check_for_updates(self, manual: bool = True) -> None:
+        _LOGGER.debug("check_for_updates called manual=%s in_progress=%s", manual, self._check_in_progress)
         if self._check_in_progress:
             self._log_update("Update check requested while another check is already running.")
             if manual:
@@ -207,6 +223,7 @@ class UpdaterController(QObject):
         self.window.show_status_message("Checking for updates...", 0)
         self._log_update(f"Check thread queued to start (id={check_id}).")
         thread.start()
+        _LOGGER.debug("check_for_updates thread started id=%d", check_id)
         QTimer.singleShot(CHECK_WATCHDOG_SEC * 1000, lambda cid=check_id: self._on_check_watchdog_timeout(cid))
 
     def _on_checked(self, _thread: QThread, info: object, check_id: int) -> None:
@@ -379,6 +396,7 @@ class UpdaterController(QObject):
         QTimer.singleShot(1200, self._refresh_progress_waiting_text)
 
     def _on_check_worker_status(self, message: str) -> None:
+        _LOGGER.debug("UpdaterController._on_check_worker_status %s", message)
         self._log_update(f"[CheckWorker] {message}")
 
     def _on_check_worker_finished(self, info: object) -> None:
@@ -389,6 +407,7 @@ class UpdaterController(QObject):
         if meta is None:
             return
         thread, check_id = meta
+        _LOGGER.debug("UpdaterController._on_check_worker_finished check_id=%d info_type=%s", check_id, type(info).__name__)
         self._on_checked(thread, info, check_id)
 
     def _on_check_worker_failed(self, message: str) -> None:
@@ -399,6 +418,7 @@ class UpdaterController(QObject):
         if meta is None:
             return
         thread, check_id = meta
+        _LOGGER.debug("UpdaterController._on_check_worker_failed check_id=%d message=%s", check_id, message)
         self._on_check_failed(thread, message, check_id)
 
     def _refresh_progress_waiting_text(self) -> None:
@@ -426,6 +446,7 @@ class UpdaterController(QObject):
 
     def download_update(self, info: UpdateInfo | None = None) -> None:
         update = info or self._last_info
+        _LOGGER.debug("download_update called has_info=%s has_last=%s", info is not None, self._last_info is not None)
         if update is None or not update.download_url:
             self._log_update("Download requested but no downloadable URL was available.")
             QMessageBox.information(self.window, "Download Update", "No downloadable update found.")
@@ -453,8 +474,10 @@ class UpdaterController(QObject):
         self.window.show_status_message("Downloading update...", 0)
         self._log_update("Download thread queued to start.")
         thread.start()
+        _LOGGER.debug("download_update thread started dest=%s", destination)
 
     def _on_download_finished(self, _thread: QThread, path: str) -> None:
+        _LOGGER.debug("_on_download_finished path=%s", path)
         hash_error = self._verify_download_hash(path, self._pending_download_sha256)
         if hash_error:
             self._log_update(f"Downloaded installer failed hash validation: {hash_error}")
@@ -490,6 +513,7 @@ class UpdaterController(QObject):
             self._log_update("User closed update-downloaded dialog without opening installer.")
 
     def _on_download_failed(self, _thread: QThread, message: str) -> None:
+        _LOGGER.debug("_on_download_failed message=%s", message)
         self._log_update(f"Update download failed: {message}")
         self.window.show_status_message("Update download failed.", 4000)
         self._show_error_with_details(
@@ -499,6 +523,7 @@ class UpdaterController(QObject):
         )
 
     def _on_download_worker_status(self, message: str) -> None:
+        _LOGGER.debug("UpdaterController._on_download_worker_status %s", message)
         self._log_update(f"[DownloadWorker] {message}")
 
     def _on_download_worker_finished(self, path: str) -> None:
@@ -508,6 +533,7 @@ class UpdaterController(QObject):
         thread = self._download_workers.get(worker)
         if thread is None:
             return
+        _LOGGER.debug("UpdaterController._on_download_worker_finished path=%s", path)
         self._on_download_finished(thread, path)
 
     def _on_download_worker_failed(self, message: str) -> None:
@@ -517,6 +543,7 @@ class UpdaterController(QObject):
         thread = self._download_workers.get(worker)
         if thread is None:
             return
+        _LOGGER.debug("UpdaterController._on_download_worker_failed message=%s", message)
         self._on_download_failed(thread, message)
 
     def _open_path(self, path: str) -> bool:

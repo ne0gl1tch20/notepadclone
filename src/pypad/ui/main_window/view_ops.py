@@ -1058,6 +1058,38 @@ class ViewOpsMixin:
         if ok:
             self.text_edit.set_font(font)
 
+    def format_selection_text_size(self) -> None:
+        tab = self.active_tab()
+        if tab is None or tab.text_edit.is_read_only():
+            return
+        if not tab.text_edit.has_selection():
+            QMessageBox.information(
+                self,
+                "Text Size",
+                "Select text first, then run Text Size (Selection).",
+            )
+            return
+        default_size = max(8, min(96, int(self.settings.get("font_size", 11) or 11)))
+        size_px, ok = QInputDialog.getInt(
+            self,
+            "Text Size (Selection)",
+            "Size (px):",
+            default_size,
+            8,
+            96,
+            1,
+        )
+        if not ok:
+            return
+        selected = tab.text_edit.selected_text()
+        tab.text_edit.replace_selection(
+            f'<span style="font-size: {int(size_px)}px;">{selected}</span>'
+        )
+        tab.text_edit.set_modified(True)
+        if tab.markdown_mode_enabled:
+            self.update_markdown_preview()
+        self.show_status_message(f"Applied text size: {int(size_px)}px", 2200)
+
     def _toggle_char_format(self, *, bold: bool | None = None, italic: bool | None = None,
                             underline: bool | None = None, strike: bool | None = None) -> None:
         marker = None
