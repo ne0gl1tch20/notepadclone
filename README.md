@@ -2,17 +2,17 @@
 
 A desktop notes editor built with `PySide6` featuring markdown, reminders, autosave recovery, workspace search, per-note encryption, and AI helpers 🤖.
 
-## Run
+## Installation
 
-```bash
-cd notepadclone/src
-python run.py
-```
+- Preferred install: use the Inno Setup installer located in `dist/installer`
+- Run the generated `.exe` installer from that folder and follow the setup wizard.
 
-Expected layout in development:
+## Platform Support
 
-- `src/run.py`
-- `assets/icons/*.svg`
+- Android is not supported at this time.
+- The creator has ideas/plans for Android support, but it is not being worked on right now.
+- If you are using Android and still want to try it, download the source code, install the `Pydroid 3` app, and run `run.py`.
+- This is only an experimental workaround and is not the intended behavior/platform right now.
 
 ## Features
 
@@ -39,30 +39,6 @@ Expected layout in development:
 - Update checker with changelog + download/install support from update XML feed
 - Interactive first-run tutorial with fade animation ✨
 - Sidebar-based Settings with search/filter and profile import/export ⚙️
-
-## AI Setup (Gemini)
-
-Install optional dependency:
-
-```bash
-pip install google-genai
-```
-
-Install QScintilla dependency for advanced editor features:
-
-```bash
-pip install PySide6-QScintilla
-```
-
-Set your API key (either in app settings or env var):
-
-```bash
-# Windows PowerShell
-$env:GEMINI_API_KEY="your_api_key_here"
-
-# Linux/macOS
-export GEMINI_API_KEY="your_api_key_here"
-```
 
 AI settings:
 
@@ -126,4 +102,7 @@ Included examples:
 - `src/notepadclone/ui/main_window/settings_dialog.py`: sidebar settings UI
 
 Made with OpenAI ChatGPT Codex Agent. Ideas & Concepts by me. Inspired by one simple notepad app.
+
+
+
 
