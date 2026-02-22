@@ -14,6 +14,21 @@ _console_lock = threading.Lock()
 _console_capture_installed = False
 
 
+class _NullStream:
+    """Minimal file-like sink used when no std streams are available."""
+
+    encoding = "utf-8"
+
+    def write(self, data) -> int:
+        return len(str(data or ""))
+
+    def flush(self) -> None:
+        return
+
+    def isatty(self) -> bool:
+        return False
+
+
 def _append_console_line(line: str) -> None:
     text = str(line or "").rstrip("\r\n")
     if not text:
@@ -43,7 +58,12 @@ class _ConsoleCaptureTee:
         text = str(data or "")
         if not text:
             return 0
-        self._stream.write(text)
+        stream = self._stream
+        if stream is not None:
+            try:
+                stream.write(text)
+            except Exception:
+                pass
         self._partial += text
         while True:
             nl_idx = self._partial.find("\n")
@@ -57,14 +77,19 @@ class _ConsoleCaptureTee:
 
     def flush(self) -> None:
         try:
-            self._stream.flush()
+            stream = self._stream
+            if stream is not None:
+                stream.flush()
         finally:
             if self._partial.strip():
                 _append_console_line(f"[{self._label}] {self._partial.rstrip(chr(13))}")
             self._partial = ""
 
     def __getattr__(self, name: str):
-        return getattr(self._stream, name)
+        stream = self._stream
+        if stream is None:
+            raise AttributeError(name)
+        return getattr(stream, name)
 
 
 class _CapturingStreamHandler(logging.StreamHandler):
@@ -114,7 +139,8 @@ def configure_app_logging(level: object = DEFAULT_LOG_LEVEL) -> str:
             handler = existing
             break
     if handler is None:
-        handler = _CapturingStreamHandler(sys.__stdout__)
+        base_stream = sys.__stdout__ or sys.stdout or sys.__stderr__ or sys.stderr or _NullStream()
+        handler = _CapturingStreamHandler(base_stream)
         handler._pypad_console_handler = True  # type: ignore[attr-defined]
         handler.setFormatter(_PypadLogFormatter())
         root_logger.addHandler(handler)
@@ -131,6 +157,10 @@ def _install_console_capture() -> None:
     global _console_capture_installed
     if _console_capture_installed:
         return
+    if sys.stdout is None:
+        sys.stdout = _NullStream()
+    if sys.stderr is None:
+        sys.stderr = _NullStream()
     if not getattr(sys.stdout, "_pypad_console_capture_wrapper", False):
         sys.stdout = _ConsoleCaptureTee(sys.stdout, label="stdout")
     if not getattr(sys.stderr, "_pypad_console_capture_wrapper", False):
