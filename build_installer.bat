@@ -28,7 +28,7 @@ if exist "assets\version.txt" (
 :version_read_done
 
 echo [1/1] Building installer with Inno Setup...
-"%ISCC_EXE%" "/DMyAppVersion=%APP_VERSION%" "installer\NotepadClone.iss"
+"%ISCC_EXE%" "/DMyAppVersion=%APP_VERSION%" "installer\PyPad.iss"
 if errorlevel 1 (
     echo [ERROR] Installer build failed.
     exit /b %errorlevel%

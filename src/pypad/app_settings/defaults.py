@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-DEFAULT_UPDATE_FEED_URL = "https://raw.githubusercontent.com/ne0gl1tch20/notepadclone/refs/heads/main/notepad.xml"
+DEFAULT_UPDATE_FEED_URL = "https://raw.githubusercontent.com/ne0gl1tch20/pypad/refs/heads/main/notepad.xml"
 
 
 def build_default_settings(*, default_style: str, font_family: str, font_size: int) -> dict:
