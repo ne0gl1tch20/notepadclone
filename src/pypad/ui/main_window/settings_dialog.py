@@ -44,6 +44,11 @@ from ..dialog_theme import (
     themed_file_dialog_get_open_file_name,
     themed_file_dialog_get_save_file_name,
 )
+from ..theme_tokens import (
+    build_dialog_theme_qss_from_tokens,
+    build_settings_dialog_qss,
+    build_tokens_from_settings,
+)
 from .settings_notepadpp_pages import (
     build_notepadpp_like_pages,
     build_npp_dark_mode_embedded_group,
@@ -778,141 +783,27 @@ class SettingsDialog(QDialog):
             label.setStyleSheet("")
 
     def _apply_dialog_theme(self) -> None:
-        dark_mode = bool(self.dark_checkbox.isChecked())
-        accent_color = self._normalize_hex(self._label_color_value(self.accent_color_label), "#4a90e2")
-        bg = "#1f2023" if dark_mode else "#f5f7fb"
-        panel = "#25272b" if dark_mode else "#ffffff"
-        text = "#e8eaed" if dark_mode else "#111111"
-        border = "#3c4043" if dark_mode else "#c9cdd3"
-        hover = "#353942" if dark_mode else "#eef3fb"
-        input_bg = "#2b2e33" if dark_mode else "#ffffff"
+        preview_settings = dict(self._settings)
+        preview_settings["dark_mode"] = bool(self.dark_checkbox.isChecked())
+        preview_settings["accent_color"] = self._normalize_hex(self._label_color_value(self.accent_color_label), "#4a90e2")
+        if hasattr(self, "theme_combo"):
+            preview_settings["theme"] = str(self.theme_combo.currentText() or preview_settings.get("theme", "Default"))
+        if hasattr(self, "use_custom_colors_checkbox"):
+            preview_settings["use_custom_colors"] = bool(self.use_custom_colors_checkbox.isChecked())
+        for key, label_attr in (
+            ("custom_editor_bg", "custom_editor_bg_label"),
+            ("custom_editor_fg", "custom_editor_fg_label"),
+            ("custom_chrome_bg", "custom_chrome_bg_label"),
+        ):
+            label = getattr(self, label_attr, None)
+            if isinstance(label, QLabel):
+                preview_settings[key] = self._label_color_value(label)
+        if hasattr(self, "ui_density_combo"):
+            preview_settings["ui_density"] = str(self.ui_density_combo.currentText() or preview_settings.get("ui_density", "comfortable"))
+
+        tokens = build_tokens_from_settings(preview_settings)
         self.setStyleSheet(
-            f"""
-            QDialog {{
-                background: {bg};
-                color: {text};
-            }}
-            #settingsHeaderCard {{
-                background: {panel};
-                border: 1px solid {border};
-                border-radius: 6px;
-            }}
-            #settingsPageTitle {{
-                color: {text};
-                background: transparent;
-                font-size: 16px;
-                font-weight: 700;
-            }}
-            #settingsPageDesc {{
-                color: {"#aeb4bc" if dark_mode else "#56606b"};
-                background: transparent;
-            }}
-            #settingsNavList, #settingsPageStack, QGroupBox {{
-                background: {panel};
-                color: {text};
-                border: 1px solid {border};
-            }}
-            #settingsNavList {{
-                border-radius: 6px;
-                outline: none;
-                padding: 4px;
-            }}
-            #settingsNavList::item {{
-                padding: 3px 7px;
-                border: 1px solid transparent;
-                border-radius: 4px;
-                font-size: 12px;
-            }}
-            #settingsNavList::item:hover {{
-                background: {hover};
-            }}
-            #settingsNavList::item:selected {{
-                background: {accent_color};
-                color: #ffffff;
-            }}
-            #settingsSearchInput {{
-                min-height: 26px;
-                padding: 2px 8px;
-                border-radius: 6px;
-            }}
-            QPushButton#settingsScopeBtn {{
-                min-width: 64px;
-                padding: 4px 12px;
-                border-radius: 0;
-                background: {panel};
-            }}
-            QPushButton#settingsScopeBtn[scopePos="left"] {{
-                border-top-left-radius: 6px;
-                border-bottom-left-radius: 6px;
-            }}
-            QPushButton#settingsScopeBtn[scopePos="right"] {{
-                border-top-right-radius: 6px;
-                border-bottom-right-radius: 6px;
-            }}
-            QPushButton#settingsScopeBtn:checked {{
-                background: {accent_color};
-                color: #ffffff;
-                border: 1px solid {accent_color};
-            }}
-            QGroupBox {{
-                margin-top: 10px;
-                padding: 8px 10px 10px 10px;
-                border-radius: 6px;
-            }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 4px;
-            }}
-            QLabel, QCheckBox, QRadioButton {{
-                color: {text};
-                background: transparent;
-            }}
-            QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit, QPlainTextEdit, QListWidget, QTableWidget {{
-                background: {input_bg};
-                color: {text};
-                border: 1px solid {border};
-                border-radius: 4px;
-            }}
-            QSlider::groove:horizontal {{
-                border: 1px solid {border};
-                background: {panel};
-                height: 6px;
-                border-radius: 3px;
-            }}
-            QSlider::handle:horizontal {{
-                background: {accent_color};
-                width: 12px;
-                margin: -5px 0;
-                border-radius: 6px;
-                border: 1px solid {accent_color};
-            }}
-            QComboBox QAbstractItemView {{
-                background: {panel};
-                color: {text};
-                selection-background-color: {accent_color};
-                selection-color: #ffffff;
-            }}
-            QPushButton {{
-                background: {panel};
-                color: {text};
-                border: 1px solid {border};
-                padding: 4px 10px;
-                border-radius: 4px;
-            }}
-            QPushButton:hover {{
-                background: {hover};
-                border: 1px solid {accent_color};
-            }}
-            QPushButton:pressed {{
-                background: {accent_color};
-                color: #ffffff;
-                border: 1px solid {accent_color};
-            }}
-            QSplitter::handle {{
-                background: {border};
-            }}
-            """
+            build_dialog_theme_qss_from_tokens(tokens) + "\n" + build_settings_dialog_qss(tokens)
         )
 
     def _label_color_value(self, label: QLabel) -> str:

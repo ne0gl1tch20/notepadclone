@@ -18,6 +18,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox, QProgressDialog
 
 from ..app_settings.defaults import DEFAULT_UPDATE_FEED_URL
 from ..logging_utils import get_logger
+from .dialog_theme import create_themed_message_box, create_themed_progress_dialog, themed_message_box_exec
 from .updater_helpers import UpdateInfo, is_newer_version, parse_update_feed, verify_metadata_signature
 
 _LOGGER = get_logger(__name__)
@@ -176,10 +177,11 @@ class UpdaterController(QObject):
         if self._check_in_progress:
             self._log_update("Update check requested while another check is already running.")
             if manual:
-                QMessageBox.information(
+                themed_message_box_exec(
                     self.window,
-                    "Check for Updates",
-                    "An update check is already in progress. Please wait a moment.",
+                    title="Check for Updates",
+                    icon=QMessageBox.Icon.Information,
+                    text="An update check is already in progress. Please wait a moment.",
                 )
             return
         feed_url = str(self.window.settings.get("update_feed_url", DEFAULT_UPDATE_FEED_URL) or "").strip()
@@ -267,10 +269,11 @@ class UpdaterController(QObject):
         if not is_newer_version(info.version, APP_VERSION):
             self._log_update(f"No update: current={APP_VERSION} remote={info.version or 'unknown'}")
             if self._manual_check:
-                QMessageBox.information(
+                themed_message_box_exec(
                     self.window,
-                    "App Is Up To Date",
-                    (
+                    title="App Is Up To Date",
+                    icon=QMessageBox.Icon.Information,
+                    text=(
                         "No updates are available right now.\n"
                         f"Feed: {self._last_feed_url}\n"
                         f"Current: {APP_VERSION}\n"
@@ -303,10 +306,12 @@ class UpdaterController(QObject):
             details.append(info.changelog[:4000])
         text = "\n".join(details)
 
-        box = QMessageBox(self.window)
-        box.setWindowTitle("Update Available")
-        box.setIcon(QMessageBox.Information)
-        box.setText(info.title or "Update available")
+        box = create_themed_message_box(
+            self.window,
+            title="Update Available",
+            icon=QMessageBox.Icon.Information,
+            text=info.title or "Update available",
+        )
         box.setInformativeText(text)
         download_btn = box.addButton("Download and Update", QMessageBox.AcceptRole)
         box.addButton("Later", QMessageBox.RejectRole)
@@ -376,8 +381,7 @@ class UpdaterController(QObject):
 
     def _show_checking_progress(self, feed_url: str) -> None:
         self._close_checking_progress()
-        dlg = QProgressDialog(self.window)
-        dlg.setWindowTitle("Checking for Updates")
+        dlg = create_themed_progress_dialog(self.window, title="Checking for Updates")
         dlg.setLabelText(
             "Checking update feed...\n"
             f"{feed_url}\n\n"
@@ -449,7 +453,12 @@ class UpdaterController(QObject):
         _LOGGER.debug("download_update called has_info=%s has_last=%s", info is not None, self._last_info is not None)
         if update is None or not update.download_url:
             self._log_update("Download requested but no downloadable URL was available.")
-            QMessageBox.information(self.window, "Download Update", "No downloadable update found.")
+            themed_message_box_exec(
+                self.window,
+                title="Download Update",
+                icon=QMessageBox.Icon.Information,
+                text="No downloadable update found.",
+            )
             return
 
         destination = self._build_capsule_destination(update.download_url)
@@ -495,10 +504,12 @@ class UpdaterController(QObject):
         self._log_update(f"Update download finished: {path}")
         self._persist_pending_update_capsule(path, self._pending_download_version)
         self.window.show_status_message(f"Update downloaded: {path}", 4000)
-        box = QMessageBox(self.window)
-        box.setWindowTitle("Update Downloaded")
-        box.setIcon(QMessageBox.Information)
-        box.setText("Update installer is ready.")
+        box = create_themed_message_box(
+            self.window,
+            title="Update Downloaded",
+            icon=QMessageBox.Icon.Information,
+            text="Update installer is ready.",
+        )
         box.setInformativeText("A temporary update capsule has been downloaded and is ready to run.")
         box.setDetailedText(path)
         open_btn = box.addButton("Open Installer", QMessageBox.AcceptRole)
@@ -645,10 +656,12 @@ class UpdaterController(QObject):
             self._cleanup_thread(thread)
 
     def _show_error_with_details(self, title: str, summary: str, details: str) -> None:
-        box = QMessageBox(self.window)
-        box.setWindowTitle(title)
-        box.setIcon(QMessageBox.Critical)
-        box.setText(summary)
+        box = create_themed_message_box(
+            self.window,
+            title=title,
+            icon=QMessageBox.Icon.Critical,
+            text=summary,
+        )
         box.setInformativeText("Open 'Show Details...' for technical information.")
         box.setDetailedText(details)
         box.setStandardButtons(QMessageBox.Ok)

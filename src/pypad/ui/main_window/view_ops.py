@@ -76,6 +76,7 @@ from ..syntax_highlighter import CodeSyntaxHighlighter
 from ..updater_controller import UpdaterController
 from ..version_history import VersionHistoryDialog
 from ..workspace_controller import WorkspaceController
+from ..theme_tokens import build_dialog_theme_qss_from_tokens, build_tokens_from_settings, build_tool_dialog_qss
 from ..document_authoring import (
     PageLayoutConfig,
     PageLayoutDialog,
@@ -774,69 +775,8 @@ class ViewOpsMixin:
         dlg.setWindowTitle("User Defined Language")
         dlg.resize(900, 720)
         root = QVBoxLayout(dlg)
-        dark_mode = bool(getattr(self, "settings", {}).get("dark_mode", False))
-        if dark_mode:
-            bg = "#1e1f22"
-            panel = "#2a2c31"
-            text = "#e8eaed"
-            border = "#4b4f57"
-            tab_bg = "#26282d"
-            tab_sel = "#333740"
-        else:
-            bg = "#f5f6f8"
-            panel = "#ffffff"
-            text = "#1f2328"
-            border = "#b9bec8"
-            tab_bg = "#e8ebf0"
-            tab_sel = "#ffffff"
-        dlg.setStyleSheet(
-            f"""
-            QDialog {{
-                background: {bg};
-                color: {text};
-            }}
-            QGroupBox {{
-                background: {panel};
-                color: {text};
-                border: 1px solid {border};
-                margin-top: 10px;
-            }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                left: 8px;
-                padding: 0 3px;
-            }}
-            QLineEdit, QComboBox, QTextEdit {{
-                background: {panel};
-                color: {text};
-                border: 1px solid {border};
-                selection-background-color: #4a90e2;
-                selection-color: #ffffff;
-            }}
-            QTabWidget::pane {{
-                background: {panel};
-                border: 1px solid {border};
-            }}
-            QTabBar::tab {{
-                background: {tab_bg};
-                color: {text};
-                border: 1px solid {border};
-                padding: 5px 10px;
-            }}
-            QTabBar::tab:selected {{
-                background: {tab_sel};
-            }}
-            QPushButton {{
-                border: 1px solid {border};
-                padding: 4px 10px;
-                background: {tab_bg};
-                color: {text};
-            }}
-            QPushButton:hover {{
-                border: 1px solid #4a90e2;
-            }}
-            """
-        )
+        tokens = build_tokens_from_settings(getattr(self, "settings", {}) if isinstance(getattr(self, "settings", {}), dict) else {})
+        dlg.setStyleSheet(build_dialog_theme_qss_from_tokens(tokens) + "\n" + build_tool_dialog_qss(tokens))
 
         top = QHBoxLayout()
         top.addWidget(QLabel("User language:", dlg))

@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 from ..logging_utils import get_logger
+from .theme_tokens import build_autosave_dialog_qss, build_dialog_theme_qss_from_tokens, build_tokens_from_settings
 
 _LOGGER = get_logger(__name__)
 
@@ -201,58 +202,8 @@ class AutoSaveRecoveryDialog(QDialog):
     def _apply_theme_from_parent(self) -> None:
         parent = getattr(self, "_theme_parent", None) or self.parentWidget()
         settings = getattr(parent, "settings", {}) if parent is not None else {}
-        dark = bool(settings.get("dark_mode", False))
-        accent = str(settings.get("accent_color", "#4a90e2") or "#4a90e2")
-        if not accent.startswith("#"):
-            accent = f"#{accent}"
-        if len(accent) not in (4, 7):
-            accent = "#4a90e2"
-        window_bg = "#202124" if dark else "#f5f7fb"
-        panel_bg = "#25272b" if dark else "#ffffff"
-        text_fg = "#e8eaed" if dark else "#111111"
-        border = "#3c4043" if dark else "#c7ccd4"
-        muted = "#9aa0a6" if dark else "#5f6368"
-        selected_bg = accent
-        selected_fg = "#ffffff"
-        btn_bg = "#303134" if dark else "#eef2f8"
-        btn_hover = accent
-        btn_border = border
-        self.setStyleSheet(
-            f"""
-            QDialog {{
-                background: {window_bg};
-                color: {text_fg};
-            }}
-            QLabel {{
-                color: {text_fg};
-            }}
-            QListWidget, QTextEdit {{
-                background: {panel_bg};
-                color: {text_fg};
-                border: 1px solid {border};
-                selection-background-color: {selected_bg};
-                selection-color: {selected_fg};
-            }}
-            QListWidget::item:selected {{
-                background: {selected_bg};
-                color: {selected_fg};
-            }}
-            QPushButton {{
-                background: {btn_bg};
-                color: {text_fg};
-                border: 1px solid {btn_border};
-                padding: 4px 10px;
-            }}
-            QPushButton:hover {{
-                background: {btn_hover};
-                color: #ffffff;
-                border: 1px solid {accent};
-            }}
-            QPushButton:disabled {{
-                color: {muted};
-            }}
-            """
-        )
+        tokens = build_tokens_from_settings(settings if isinstance(settings, dict) else {})
+        self.setStyleSheet(build_dialog_theme_qss_from_tokens(tokens) + "\n" + build_autosave_dialog_qss(tokens))
 
     def _populate(self, entries: list[AutoSaveEntry]) -> None:
         for entry in entries:

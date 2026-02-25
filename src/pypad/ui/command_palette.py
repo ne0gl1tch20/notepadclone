@@ -43,7 +43,7 @@ def _score(query: str, candidate: str) -> int:
 
 
 class CommandPaletteDialog(QDialog):
-    def __init__(self, parent, items: list[PaletteItem]) -> None:
+    def __init__(self, parent, items: list[PaletteItem], *, initial_query: str = "") -> None:
         super().__init__(parent)
         self.setWindowTitle("Command Palette")
         self.resize(560, 440)
@@ -76,6 +76,8 @@ class CommandPaletteDialog(QDialog):
         self.cancel_btn.clicked.connect(self.reject)
 
         self._refresh_list()
+        if initial_query:
+            self.search_edit.setText(initial_query)
         self.search_edit.setFocus()
 
     def _refresh_list(self) -> None:

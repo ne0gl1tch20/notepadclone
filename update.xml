@@ -1,27 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <updates>
   <item>
-    <title>PyPad 1.7.3-prerelease</title>
-    <version>1.7.3</version>
-    <pubDate>2026-02-22</pubDate>
+    <title>PyPad 1.7.4-prerelease</title>
+    <version>1.7.4</version>
+    <pubDate>2026-02-26</pubDate>
     <description>
-      - Expanded Preferences with unified PyPad + N++ compatibility pages and refined Notepad++-style navigation
-      - Added user-selectable logging level and broader DEBUG instrumentation (AI chat/controller, updater, autosave, file ops)
-      - Debug Logs can now include process-wide console output (root logging + stdout/stderr capture)
-      - AI chat now shows OpenAI-style attachment chips and richer apply-flow tracing with correlation IDs
-      - AI chat message bubbles now show hover actions (edit/copy for prompts, retry/copy/insert for responses)
-      - Editing an older prompt now rewrites that prompt in-place and regenerates from that point with a clear warning
-      - AI "replace current tab" offers now ask for confirmation before replacing tab contents
-      - Fixed AI chat streaming thread-to-UI callback issue that could cause freezes/closes during replies
-      - AI chat auto-scroll now follows new replies only when already near the bottom (send still jumps to latest)
-      - Added rich editor right-click context menu with AI/PyPad actions, quick AI row, icons, and style submenu
-      - Added runtime hooks for N++ compatibility settings (new doc encoding/EOL, indentation defaults, print templates, link schemes)
-      - Improved dialog theming consistency and fixed startup recovery dialog taskbar visibility
-      - Detailed changelogs can be found at Changelog.md
+      - Soft modern rounded UI overhaul across core chrome (tabs, toolbars, menus, docks, status bar, scrollbars)
+      - Shared token-based theming now powers main UI, dialogs, Quick Open, AI Chat, and more utility panels
+      - Quick Open / Go to Anything expanded with symbols, workspace symbols, background indexing/cache, grouping, and live refresh
+      - AI chat productivity upgrades: one-click apply actions, diff preview flow, whole-file replace actions, and safer insert-offer parsing
+      - Dialog theming expanded across Settings, Tutorial, Autosave, Workspace dialogs, AI edit preview, Debug Logs, and updater dialogs
+      - Added visual UI regression tooling (screenshot smoke tests, HTML manifest, baseline compare/update mode, CI gate)
+      - Split UI CI checks into fast, runtime-smoke, and visual-smoke workflows for faster feedback
+      - Fixed tab-close hover-mode theming/runtime regressions discovered by new smoke tests
+      - Detailed changelog: CHANGELOG.md
     </description>
     <sha256>0000000000000000000000000000000000000000000000000000000000000000</sha256>
     <enclosure
-      url="https://github.com/ne0gl1tch20/pypad/raw/refs/heads/main/dist/installer/PyPad-Setup-1.7.3-prerelease.exe"
+      url="https://github.com/ne0gl1tch20/pypad/raw/refs/heads/main/dist/installer/PyPad-Setup-1.7.4-prerelease.exe"
       type="application/octet-stream" />
   </item>
 </updates>

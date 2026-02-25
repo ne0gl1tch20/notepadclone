@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from .theme_tokens import build_dialog_theme_qss_from_tokens, build_tokens_from_settings, build_tutorial_dialog_qss
 
 
 class InteractiveTutorialDialog(QDialog):
@@ -33,7 +34,9 @@ class InteractiveTutorialDialog(QDialog):
         layout.addWidget(self.title_label)
 
         self.body_label = QLabel("", self)
+        self.body_label.setObjectName("tutorialBodyCard")
         self.body_label.setWordWrap(True)
+        self.body_label.setContentsMargins(12, 10, 12, 10)
         self.body_label.setStyleSheet("font-size: 14px;")
         layout.addWidget(self.body_label, 1)
 
@@ -75,75 +78,8 @@ class InteractiveTutorialDialog(QDialog):
     def _apply_theme_from_parent(self) -> None:
         parent = self.parent()
         settings = getattr(parent, "settings", {}) if parent is not None else {}
-        dark_mode = bool(settings.get("dark_mode", False))
-        accent = self._normalize_hex(str(settings.get("accent_color", "#4a90e2")), "#4a90e2")
-        theme = str(settings.get("theme", "Default") or "Default")
-        use_custom = bool(settings.get("use_custom_colors", False))
-
-        palette_map = {
-            "Default": {"window_bg": "#ffffff", "text_color": "#000000", "chrome_bg": "#f0f0f0"},
-            "Soft Light": {"window_bg": "#f5f5f7", "text_color": "#222222", "chrome_bg": "#e1e1e6"},
-            "High Contrast": {"window_bg": "#000000", "text_color": "#ffffff", "chrome_bg": "#000000"},
-            "Solarized Light": {"window_bg": "#fdf6e3", "text_color": "#586e75", "chrome_bg": "#eee8d5"},
-            "Ocean Blue": {"window_bg": "#eaf4ff", "text_color": "#10324a", "chrome_bg": "#d6e9fb"},
-        }
-
-        if dark_mode:
-            bg = "#202124"
-            text = "#e8eaed"
-            chrome_bg = "#303134"
-            border = "#3c4043"
-            hover_bg = "#3a3f45"
-        else:
-            palette = palette_map.get(theme, palette_map["Default"])
-            bg = palette["window_bg"]
-            text = palette["text_color"]
-            chrome_bg = palette["chrome_bg"]
-            border = "#c0c0c0"
-            hover_bg = "#e9eef7"
-
-        if use_custom:
-            custom_editor_bg = self._normalize_hex(str(settings.get("custom_editor_bg", "")), "")
-            custom_editor_fg = self._normalize_hex(str(settings.get("custom_editor_fg", "")), "")
-            custom_chrome_bg = self._normalize_hex(str(settings.get("custom_chrome_bg", "")), "")
-            if custom_editor_bg:
-                bg = custom_editor_bg
-            if custom_editor_fg:
-                text = custom_editor_fg
-            if custom_chrome_bg:
-                chrome_bg = custom_chrome_bg
-
-        self.setStyleSheet(
-            f"""
-            QDialog {{
-                background: {bg};
-                color: {text};
-            }}
-            QLabel {{
-                color: {text};
-                background: transparent;
-            }}
-            QPushButton {{
-                background: {chrome_bg};
-                color: {text};
-                border: 1px solid {border};
-                border-radius: 6px;
-                padding: 6px 12px;
-            }}
-            QPushButton:hover {{
-                background: {hover_bg};
-                border: 1px solid {accent};
-            }}
-            QPushButton:pressed {{
-                background: {accent};
-                color: #ffffff;
-                border: 1px solid {accent};
-            }}
-            QPushButton:disabled {{
-                opacity: 0.55;
-            }}
-            """
-        )
+        tokens = build_tokens_from_settings(settings if isinstance(settings, dict) else {})
+        self.setStyleSheet(build_dialog_theme_qss_from_tokens(tokens) + "\n" + build_tutorial_dialog_qss(tokens))
 
     def _animate_swap(self, callback) -> None:
         self.anim.stop()

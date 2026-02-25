@@ -152,7 +152,7 @@ class UiSetupMixin:
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         label.setWordWrap(True)
         label.setProperty("i18n_skip", True)
-        label.setStyleSheet("font-size: 14px; color: #666;")
+        label.setObjectName("emptyTabsHint")
         layout.addWidget(label)
         layout.addStretch(1)
         return holder
@@ -1612,6 +1612,7 @@ class UiSetupMixin:
         self.insert_meeting_template_action.setEnabled(has_tab)
         self.insert_daily_template_action.setEnabled(has_tab)
         self.insert_checklist_template_action.setEnabled(has_tab)
+        self.quick_open_action.setEnabled(True)
 
         # Edit actions
         self.undo_action.setEnabled(has_tab and can_undo and not is_read_only)
@@ -2078,6 +2079,9 @@ class UiSetupMixin:
 
         self.open_workspace_action = QAction("Open Workspace Folder...", self)
         self.open_workspace_action.triggered.connect(self.open_workspace_folder)
+        self.quick_open_action = QAction("Quick Open / Go to Anything...", self)
+        self.quick_open_action.setShortcut(QKeySequence("Ctrl+Alt+P"))
+        self.quick_open_action.triggered.connect(self.open_quick_open)
         self.workspace_files_action = QAction("Workspace Files...", self)
         self.workspace_files_action.triggered.connect(self.show_workspace_files)
         self.workspace_search_action = QAction("Search Workspace...", self)
@@ -2292,6 +2296,7 @@ class UiSetupMixin:
         self.convert_randomcase_action.triggered.connect(self.edit_convert_random_case)
 
         self.line_duplicate_action = QAction("Duplicate Current Line", self)
+        self.line_duplicate_action.setShortcut(QKeySequence("Ctrl+Shift+D"))
         self.line_duplicate_action.triggered.connect(self.edit_line_duplicate_current)
         self.line_remove_duplicates_action = QAction("Remove Duplicate Lines", self)
         self.line_remove_duplicates_action.triggered.connect(self.edit_line_remove_duplicate_lines)
@@ -2300,12 +2305,16 @@ class UiSetupMixin:
             self.edit_line_remove_consecutive_duplicate_lines
         )
         self.line_split_action = QAction("Split Lines", self)
+        self.line_split_action.setShortcut(QKeySequence("Ctrl+Alt+J"))
         self.line_split_action.triggered.connect(self.edit_line_split_selected)
         self.line_join_action = QAction("Join Lines", self)
+        self.line_join_action.setShortcut(QKeySequence("Ctrl+J"))
         self.line_join_action.triggered.connect(self.edit_line_join_selected)
         self.line_move_up_action = QAction("Move Up Current Line", self)
+        self.line_move_up_action.setShortcut(QKeySequence("Alt+Shift+Up"))
         self.line_move_up_action.triggered.connect(self.edit_line_move_up)
         self.line_move_down_action = QAction("Move Down Current Line", self)
+        self.line_move_down_action.setShortcut(QKeySequence("Alt+Shift+Down"))
         self.line_move_down_action.triggered.connect(self.edit_line_move_down)
         self.line_insert_blank_above_action = QAction("Insert Blank Line Above Current", self)
         self.line_insert_blank_above_action.triggered.connect(self.edit_line_insert_blank_above)
@@ -2479,7 +2488,7 @@ class UiSetupMixin:
         self.stop_macro_recording_action.triggered.connect(self.stop_macro_recording)
 
         self.play_macro_action = QAction("Playback Macro", self)
-        self.play_macro_action.setShortcut(QKeySequence("Ctrl+Shift+P"))
+        self.play_macro_action.setShortcut(QKeySequence("Ctrl+Alt+Shift+P"))
         self.play_macro_action.triggered.connect(self.play_macro)
 
         self.save_current_macro_action = QAction("Save Current Recorded Macro...", self)
@@ -3157,6 +3166,7 @@ class UiSetupMixin:
         icon_map = {
             self.new_action: ("document-new", icon_new if not icon_new.isNull() else fallback),
             self.open_action: ("document-open", icon_open if not icon_open.isNull() else self._standard_style_icon("SP_DialogOpenButton")),
+            self.quick_open_action: ("document-open", icon_open if not icon_open.isNull() else self._standard_style_icon("SP_DialogOpenButton")),
             self.save_action: ("document-save", icon_save if not icon_save.isNull() else self._standard_style_icon("SP_DialogSaveButton")),
             self.save_all_action: ("document-save-all", icon_save_all if not icon_save_all.isNull() else self._standard_style_icon("SP_DialogSaveButton")),
             self.close_tab_action: ("window-close", icon_close_tab if not icon_close_tab.isNull() else self._standard_style_icon("SP_DialogCloseButton")),
@@ -3329,6 +3339,7 @@ class UiSetupMixin:
         self.file_menu = menu_bar.addMenu("&File")
         self.file_menu.addAction(self.new_action)
         self.file_menu.addAction(self.open_action)
+        self.file_menu.addAction(self.quick_open_action)
         self.file_menu.addAction(self.save_action)
         self.file_menu.addAction(self.save_as_action)
         self.file_menu.addAction(self.rename_action)

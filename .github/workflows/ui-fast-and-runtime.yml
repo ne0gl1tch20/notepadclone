@@ -1,0 +1,55 @@
+name: UI Fast And Runtime
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+
+jobs:
+  ui-fast:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install test deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install PySide6 pytest
+
+      - name: Run fast UI theme/dialog tests
+        run: |
+          python -m pytest tests/test_ui_theme_tokens.py tests/test_dialog_theme.py tests/test_main_theme_qss_builder.py -q
+
+  ui-runtime-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install test deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install PySide6 pytest
+
+      - name: Run runtime smoke tests
+        run: |
+          python -m pytest tests/test_settings_apply_runtime.py -q

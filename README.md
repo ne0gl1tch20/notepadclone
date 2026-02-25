@@ -1,108 +1,45 @@
-# Pypad 📝
+﻿# Pypad
 
-A desktop notes editor built with `PySide6` featuring markdown, reminders, autosave recovery, workspace search, per-note encryption, and AI helpers 🤖.
+Pypad is a PySide6 desktop text editor focused on fast note-taking and power-user workflows.
 
-## Installation
+Highlights:
+- Soft modern rounded UI overhaul with token-based theming
+- Multi-tab editor with detachable tabs, pin/favorite states, and rich tab actions
+- Quick Open / Go to Anything (`Ctrl+Alt+P`) with file, line, symbol, workspace-symbol, and command modes
+- AI chat dock with one-click apply actions (Insert/Replace/Append/New Tab/Replace File/Diff)
+- Markdown tools + live preview, syntax modes, workspace search, autosave/recovery, version history
+- Preferences with unified PyPad + Notepad++ compatibility pages
+- Visual UI regression tooling (screenshot smoke tests + baseline compare CI)
 
-- Preferred install: use the Inno Setup installer located in `dist/installer`
-- Run the generated `.exe` installer from that folder and follow the setup wizard.
+## Install / Run
 
-## Platform Support
+- Development: run `src/run.py`
+- Build: `compile.bat`
+- Version file: `assets/version.txt`
+- Installer artifacts (when built): `dist/installer/`
 
-- Android is not supported at this time.
-- The creator has ideas/plans for Android support, but it is not being worked on right now.
-- If you are using Android and still want to try it, download the source code, install the `Pydroid 3` app, and run `run.py`.
-- This is only an experimental workaround and is not the intended behavior/platform right now.
+## Key Paths
 
-## Features
+- Main window: `src/pypad/ui/main_window/window.py`
+- Theme tokens / chrome QSS: `src/pypad/ui/theme_tokens.py`
+- Dialog theming helpers: `src/pypad/ui/dialog_theme.py`
+- AI chat dock: `src/pypad/ui/ai_chat_dock.py`
+- Quick Open dialog: `src/pypad/ui/quick_open_dialog.py`
+- Settings dialog: `src/pypad/ui/main_window/settings_dialog.py`
+- Update feed metadata: `update.xml`
 
-- Multi-tab editor with detachable tabs 🗂️
-- Middle-click tab close
-- Markdown formatting and live preview ✨
-- Syntax highlighting with per-tab language picker
-- QScintilla power editing: column mode, multi-caret, code folding, bookmarks
-- Search panel with highlight-all
-- Version history with diff preview ♻️
-- Autosave and crash recovery
-- Reminders, recurrence, and snooze ⏰
-- Templates (meeting, daily log, checklist)
-- Export to PDF, Markdown, HTML
-- Favorites, pinned tabs, tags 📌♥
-- Workspace folder browser and search across files
-- Drag-drop media insertion for markdown/text notes
-- Per-note encryption (`.encnote`) 🔐
-- AI actions:
-  - Ask AI
-  - Explain selected text
-  - Generate text to current tab
-  - Async generation + result panel (copy/insert/replace)
-- Update checker with changelog + download/install support from update XML feed
-- Interactive first-run tutorial with fade animation ✨
-- Sidebar-based Settings with search/filter and profile import/export ⚙️
+## UI Test / Visual Regression Commands
 
-AI settings:
+- Fast UI checks:
+  - `powershell -File scripts/run_ui_checks.ps1 -Fast`
+- Runtime smoke:
+  - `powershell -File scripts/run_ui_checks.ps1 -Runtime`
+- Visual smoke baseline compare:
+  - `powershell -File scripts/run_ui_checks.ps1 -Visual`
+- Update visual baseline (intentional refresh):
+  - `powershell -File scripts/run_ui_checks.ps1 -Visual -UpdateVisualBaseline`
 
-- `Settings -> AI & Updates -> Gemini API key`
-- `Settings -> AI & Updates -> Model` (default `gemini-3-flash-preview`)
-- Result panel actions: `Copy`, `Insert`, `Replace Selection`
+## Notes
 
-Update settings:
-
-- `Settings -> AI & Updates -> Update feed URL`
-- `Settings -> AI & Updates -> Check for updates on startup`
-- Manual check: `Help -> Check for Updates...`
-
-## Encryption Notes
-
-- Enable from `File -> Security -> Enable Note Encryption...`
-- Save encrypted notes as `.encnote`
-- Opening encrypted notes prompts for password
-- Password is kept in-memory per open tab/session and is not written to settings
-
-## Workspace Notes
-
-- Set workspace via `File -> Workspace -> Open Workspace Folder...`
-- Browse workspace files from `Workspace Files...`
-- Search text across workspace from `Search Workspace...`
-
-## Plugins
-
-Pypad includes a local plugin system with permission-based capabilities.
-
-- Open manager: `Settings -> Plugin Manager...`
-- Plugin docs: `docs/plugins.md`
-- Plugin folder layout:
-  - `plugins/<plugin_folder>/plugin.json`
-  - `plugins/<plugin_folder>/plugin.py`
-
-Supported permissions:
-
-- `file`: allows file/text write operations through plugin API
-- `network`: allows network-capability checks through plugin API
-- `ai`: allows plugin-triggered AI requests through plugin API
-
-Included examples:
-
-- `plugins/example_word_tools` (`file`, `ai`)
-- `plugins/example_hello_network` (`network`)
-
-## Project Structure
-
-- `src/notepadclone/ui/main_window/window.py`: main UI shell and integration points
-- `src/notepadclone/ui/asset_paths.py`: dev/PyInstaller asset path resolver (`_MEIPASS` aware)
-- `src/notepadclone/ui/workspace_controller.py`: workspace/media logic
-- `src/notepadclone/ui/security_controller.py`: per-note encryption flow
-- `src/notepadclone/ui/ai_controller.py`: Gemini AI actions
-- `src/notepadclone/ui/updater_controller.py`: update feed check/download/install flow
-- `src/notepadclone/ui/updater_helpers.py`: unit-testable update XML/version helpers
-- `src/notepadclone/ui/note_crypto.py`: encrypted payload format and crypto helpers
-- `src/notepadclone/ui/crypto_helpers.py`: pure crypto primitives
-- `src/notepadclone/ui/workspace_search_helpers.py`: pure workspace scan/search helpers
-- `src/notepadclone/ui/tutorial_dialog.py`: first-run interactive tutorial dialog
-- `src/notepadclone/ui/main_window/settings_dialog.py`: sidebar settings UI
-
-Made with OpenAI ChatGPT Codex Agent. Ideas & Concepts by me. Inspired by one simple notepad app.
-
-
-
-
+- `tests/visual_smoke_phase2_baseline.json` is the committed visual baseline used by CI.
+- `tests_tmp/visual_smoke_phase2/index.html` is generated during visual smoke runs for quick review.

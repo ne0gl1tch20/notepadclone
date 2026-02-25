@@ -3,7 +3,8 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import QObject, QEvent
-from PySide6.QtWidgets import QDialog, QFileDialog, QWidget
+from PySide6.QtWidgets import QDialog, QFileDialog, QMessageBox, QProgressDialog, QWidget
+from .theme_tokens import build_dialog_theme_qss_from_tokens, build_tokens_from_settings
 
 
 def _normalize_hex(value: object, fallback: str) -> str:
@@ -20,61 +21,8 @@ def _normalize_hex(value: object, fallback: str) -> str:
 
 
 def build_dialog_theme_qss(settings: dict[str, Any]) -> str:
-    dark = bool(settings.get("dark_mode", False))
-    accent = _normalize_hex(settings.get("accent_color", "#4a90e2"), "#4a90e2")
-    window_bg = "#202124" if dark else "#f5f7fb"
-    panel_bg = "#25272b" if dark else "#ffffff"
-    text_fg = "#e8eaed" if dark else "#111111"
-    muted = "#9aa0a6" if dark else "#5f6368"
-    border = "#3c4043" if dark else "#c7ccd4"
-    input_bg = "#1f2023" if dark else "#ffffff"
-    button_bg = "#303134" if dark else "#eef2f8"
-    return f"""
-        QDialog {{
-            background: {window_bg};
-            color: {text_fg};
-        }}
-        QLabel, QCheckBox, QRadioButton, QGroupBox {{
-            color: {text_fg};
-        }}
-        QGroupBox {{
-            border: 1px solid {border};
-            margin-top: 10px;
-            padding-top: 6px;
-        }}
-        QGroupBox::title {{
-            subcontrol-origin: margin;
-            left: 8px;
-            padding: 0 4px;
-        }}
-        QListWidget, QTextEdit, QPlainTextEdit, QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QTableWidget, QTreeWidget {{
-            background: {input_bg};
-            color: {text_fg};
-            border: 1px solid {border};
-            selection-background-color: {accent};
-            selection-color: #ffffff;
-        }}
-        QComboBox QAbstractItemView {{
-            background: {panel_bg};
-            color: {text_fg};
-            selection-background-color: {accent};
-            selection-color: #ffffff;
-        }}
-        QPushButton {{
-            background: {button_bg};
-            color: {text_fg};
-            border: 1px solid {border};
-            padding: 4px 10px;
-        }}
-        QPushButton:hover {{
-            background: {accent};
-            color: #ffffff;
-            border: 1px solid {accent};
-        }}
-        QPushButton:disabled {{
-            color: {muted};
-        }}
-    """
+    tokens = build_tokens_from_settings(settings if isinstance(settings, dict) else {})
+    return build_dialog_theme_qss_from_tokens(tokens)
 
 
 def apply_dialog_theme_from_window(window: QWidget | None, dialog: QDialog) -> None:
@@ -82,6 +30,41 @@ def apply_dialog_theme_from_window(window: QWidget | None, dialog: QDialog) -> N
     if not isinstance(settings, dict):
         settings = {}
     dialog.setStyleSheet(build_dialog_theme_qss(settings))
+
+
+def create_themed_message_box(window: QWidget | None, *, title: str, icon: QMessageBox.Icon, text: str) -> QMessageBox:
+    box = QMessageBox(window)
+    box.setWindowTitle(title)
+    box.setIcon(icon)
+    box.setText(text)
+    apply_dialog_theme_from_window(window, box)
+    return box
+
+
+def themed_message_box_exec(
+    window: QWidget | None,
+    *,
+    title: str,
+    icon: QMessageBox.Icon,
+    text: str,
+    informative: str = "",
+    detailed: str = "",
+    buttons: QMessageBox.StandardButton | QMessageBox.StandardButtons = QMessageBox.StandardButton.Ok,
+) -> int:
+    box = create_themed_message_box(window, title=title, icon=icon, text=text)
+    if informative:
+        box.setInformativeText(informative)
+    if detailed:
+        box.setDetailedText(detailed)
+    box.setStandardButtons(buttons)
+    return box.exec()
+
+
+def create_themed_progress_dialog(window: QWidget | None, *, title: str) -> QProgressDialog:
+    dlg = QProgressDialog(window)
+    dlg.setWindowTitle(title)
+    apply_dialog_theme_from_window(window, dlg)
+    return dlg
 
 
 class _DialogThemeEventFilter(QObject):

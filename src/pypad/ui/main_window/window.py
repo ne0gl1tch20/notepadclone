@@ -127,6 +127,14 @@ class Notepad(UiSetupMixin, FileOpsMixin, EditOpsMixin, ViewOpsMixin, MiscMixin,
         self._jump_history: list[dict[str, object]] = []
         self._jump_history_index = -1
         self._suspend_jump_recording = False
+        self._quick_open_workspace_cache: list[object] = []
+        self._quick_open_cache_root: str = ""
+        self._quick_open_cache_built_at = 0.0
+        self._quick_open_indexing = False
+        self._quick_open_workspace_symbol_cache: list[object] = []
+        self._quick_open_workspace_symbol_cache_root: str = ""
+        self._quick_open_workspace_symbol_cache_built_at = 0.0
+        self._quick_open_workspace_symbol_indexing = False
         self._search_results_query = ""
         self._search_results_items: list[dict[str, object]] = []
         self._search_results_index = -1

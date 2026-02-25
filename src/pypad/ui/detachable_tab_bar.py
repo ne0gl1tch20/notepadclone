@@ -75,7 +75,7 @@ class DetachableTabBar(QTabBar):
         button.setToolTip("Close tab")
         button.setText("x")
         button.setToolButtonStyle(Qt.ToolButtonTextOnly)
-        button.setStyleSheet("QToolButton { padding: 0px; margin: 0px; }")
+        button.setStyleSheet("")
         button.setFixedSize(14, 14)
 
     def _tab_is_pinned(self, index: int) -> bool:

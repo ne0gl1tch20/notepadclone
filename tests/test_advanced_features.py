@@ -10,7 +10,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from notepadclone.ui.advanced_features import apply_text_operations, compute_plugin_digest
+from pypad.ui.advanced_features import apply_text_operations, compute_plugin_digest
 
 
 class AdvancedFeaturesHelpersTests(unittest.TestCase):

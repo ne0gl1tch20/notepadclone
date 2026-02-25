@@ -49,6 +49,7 @@ from .ai_collaboration import build_workspace_citation_snippets, paragraph_bound
 from .ai_edit_preview_dialog import AIEditPreviewDialog
 from .workspace_search_helpers import collect_workspace_files, search_files_for_query
 from .main_window.notepadpp_pref_runtime import is_clickable_scheme_allowed
+from .theme_tokens import build_ai_chat_qss, build_tokens_from_settings
 from ..logging_utils import get_logger
 
 if TYPE_CHECKING:
@@ -152,7 +153,7 @@ class _HoverActionRow(QWidget):
 
 class _Bubble(QFrame):
     _HIDDEN_COMMAND_RE = re.compile(
-        r"\[PYPAD_CMD_(?:OFFER_INSERT|SET_FILE|SET_CHAT_TITLE|OFFER_PATCH|PROPOSE_ACTION)_BEGIN\].*?\[PYPAD_CMD_(?:OFFER_INSERT|SET_FILE|SET_CHAT_TITLE|OFFER_PATCH|PROPOSE_ACTION)_END\]",
+        r"\[PYPAD_CMD_(?:(?:OFFER|OFF)_INSERT|SET_FILE|SET_CHAT_TITLE|OFFER_PATCH|PROPOSE_ACTION)_BEGIN\].*?\[PYPAD_CMD_(?:(?:OFFER|OFF)_INSERT|SET_FILE|SET_CHAT_TITLE|OFFER_PATCH|PROPOSE_ACTION)_END\]",
         re.DOTALL | re.IGNORECASE,
     )
     _BROKEN_BUTTON_LINK_RE = re.compile(
@@ -415,7 +416,7 @@ class _DockTitleBar(QWidget):
 class AIChatDock(QDockWidget):
     apply_completed = Signal(str, bool, str)
     _INSERT_CMD_RE = re.compile(
-        r"\[PYPAD_CMD_OFFER_INSERT_BEGIN\](.*?)\[PYPAD_CMD_OFFER_INSERT_END\]",
+        r"\[PYPAD_CMD_(?:OFFER|OFF)_INSERT_BEGIN\](.*?)\[PYPAD_CMD_(?:OFFER|OFF)_INSERT_END\]",
         re.DOTALL | re.IGNORECASE,
     )
     _SET_FILE_CMD_RE = re.compile(
@@ -652,158 +653,12 @@ class AIChatDock(QDockWidget):
             return ""
 
     def _apply_styles(self) -> None:
-        dark_mode = self._is_effective_dark_mode()
-        surface_bg = "#1f2329" if dark_mode else "#ffffff"
-        user_bg = "#2f343a" if dark_mode else "#daf1ff"
-        user_border = "#51565c" if dark_mode else "#9ecff2"
-        assistant_bg = "#24272b" if dark_mode else "#f0f0f0"
-        assistant_border = "#464a50" if dark_mode else "#d0d0d0"
-        text_color = "#ffffff" if dark_mode else "#111111"
-        panel_bg = "#1d2024" if dark_mode else "#f5f7fb"
-        self.setStyleSheet(
-            f"""
-            QDockWidget#aiChatDock {{
-                background: {panel_bg};
-            }}
-            QWidget#aiChatHost {{
-                background: {panel_bg};
-            }}
-            QScrollArea#aiChatScroll {{
-                background: {surface_bg};
-                border: 1px solid {assistant_border};
-                border-radius: 10px;
-            }}
-            QWidget#aiChatViewport,
-            QWidget#aiChatMessages {{
-                background: {surface_bg};
-            }}
-            QWidget#aiChatRow {{
-                background: transparent;
-            }}
-            QWidget#aiChatBubbleActions {{
-                background: transparent;
-            }}
-            QFrame#userBubble {{
-                background: {user_bg};
-                border: 1px solid {user_border};
-                border-radius: 10px;
-            }}
-            QFrame#assistantBubble {{
-                background: {assistant_bg};
-                border: 1px solid {assistant_border};
-                border-radius: 10px;
-            }}
-            QFrame#userBubble QTextBrowser,
-            QFrame#assistantBubble QTextBrowser {{
-                color: {text_color};
-                background: transparent;
-                border: none;
-                font-family: "Segoe UI", "Noto Sans", sans-serif;
-                font-size: 10pt;
-            }}
-            QPlainTextEdit#aiChatInput {{
-                background: {"#2a2d31" if dark_mode else "#ffffff"};
-                color: {text_color};
-                border: 1px solid {assistant_border};
-            }}
-            QWidget#aiChatAttachmentsBar {{
-                background: {"#2a2d31" if dark_mode else "#ffffff"};
-                border: 1px solid {assistant_border};
-                border-radius: 8px;
-            }}
-            QScrollArea#aiChatAttachmentsScroll,
-            QWidget#aiChatAttachmentsHost {{
-                background: transparent;
-                border: none;
-            }}
-            QWidget#aiChatAttachmentChip {{
-                background: {"#30343a" if dark_mode else "#eef3fb"};
-                border: 1px solid {assistant_border};
-                border-radius: 12px;
-            }}
-            QLabel#aiChatAttachmentChipIcon,
-            QLabel#aiChatAttachmentChipText {{
-                color: {text_color};
-                background: transparent;
-                border: none;
-            }}
-            QPushButton#aiChatAttachmentChipRemove {{
-                background: transparent;
-                color: {text_color};
-                border: none;
-                padding: 0px 4px;
-                min-width: 16px;
-            }}
-            QPushButton#aiChatAttachmentChipRemove:hover {{
-                background: {"#444a52" if dark_mode else "#dde7f6"};
-                border-radius: 8px;
-            }}
-            QLabel#aiPendingInsertLabel {{
-                color: {text_color};
-                background: {"#2a2d31" if dark_mode else "#eef3fb"};
-                border: 1px solid {assistant_border};
-                border-radius: 6px;
-                padding: 4px 8px;
-            }}
-            QLabel#aiChatSessionTitle {{
-                color: {"#d7dde7" if dark_mode else "#1d2a3a"};
-                background: transparent;
-                border: none;
-                border-radius: 0px;
-                padding: 0px 4px;
-                font-weight: 600;
-            }}
-            QPushButton {{
-                background: {"#2f3338" if dark_mode else "#f5f6f8"};
-                color: {text_color};
-                border: 1px solid {assistant_border};
-                padding: 4px 8px;
-            }}
-            QPushButton:disabled {{
-                color: {"#9aa0a6" if dark_mode else "#888888"};
-            }}
-            QPushButton#aiChatBubbleActionButton {{
-                background: {"#2f3338" if dark_mode else "#f5f6f8"};
-                color: {text_color};
-                border: 1px solid {assistant_border};
-                border-radius: 6px;
-                padding: 0px;
-            }}
-            QPushButton#aiChatBubbleActionButton:hover {{
-                background: {"#3a3f45" if dark_mode else "#e9edf3"};
-            }}
-            QPushButton#aiChatBubbleActionButton:pressed {{
-                background: {"#464b53" if dark_mode else "#dfe5ee"};
-            }}
-            """
-        )
-        self._title_bar.label.setStyleSheet(f"color: {'#ffffff' if dark_mode else '#000000'};")
-        self._title_bar.setStyleSheet(
-            f"""
-            QWidget#aiChatTitleBar {{
-                background: {panel_bg};
-                border-bottom: 1px solid {assistant_border};
-            }}
-            QLabel#aiChatTitleLabel {{
-                color: {'#ffffff' if dark_mode else '#000000'};
-                font-weight: 600;
-            }}
-            QWidget#aiChatTitleBar QToolButton {{
-                background: transparent;
-                border: 1px solid transparent;
-                border-radius: 3px;
-                padding: 0px;
-            }}
-            QWidget#aiChatTitleBar QToolButton:hover {{
-                background: {'#2f3338' if dark_mode else '#e7ebf1'};
-                border: 1px solid {assistant_border};
-            }}
-            QWidget#aiChatTitleBar QToolButton:pressed {{
-                background: {'#3a3f45' if dark_mode else '#dfe5ee'};
-                border: 1px solid {assistant_border};
-            }}
-            """
-        )
+        settings = getattr(self.ai_controller.window, "settings", {})
+        tokens = build_tokens_from_settings(settings if isinstance(settings, dict) else {})
+        body_qss, title_qss = build_ai_chat_qss(tokens)
+        self.setStyleSheet(body_qss)
+        self._title_bar.label.setStyleSheet(f"color: {tokens.text};")
+        self._title_bar.setStyleSheet(title_qss)
         float_icon = self._icon("view-fullscreen", size=12)
         close_icon = self._icon("tab-close", size=12)
         if not float_icon.isNull():
@@ -2281,12 +2136,27 @@ class AIChatDock(QDockWidget):
             retry_btn = self._create_bubble_action_button(actions, icon_name="sync-horizontal", tooltip="Retry", text="Retry")
             copy_btn = self._create_bubble_action_button(actions, icon_name="edit-copy", tooltip="Copy", text="Copy")
             insert_btn = self._create_bubble_action_button(actions, icon_name="edit-paste", tooltip="Insert to tab", text="Insert")
+            replace_btn = self._create_bubble_action_button(actions, icon_name="edit-find-replace", tooltip="Replace selection", text="Replace")
+            append_btn = self._create_bubble_action_button(actions, icon_name="edit-paste", tooltip="Append to tab", text="Append")
+            new_tab_btn = self._create_bubble_action_button(actions, icon_name="document-new", tooltip="Open in new tab", text="New Tab")
+            replace_file_btn = self._create_bubble_action_button(actions, icon_name="document-save", tooltip="Replace whole file (with preview)", text="Replace File")
+            diff_btn = self._create_bubble_action_button(actions, icon_name="edit-find-replace", tooltip="Open diff preview", text="Diff")
             retry_btn.clicked.connect(lambda: self._retry_bubble_response(row))
             copy_btn.clicked.connect(lambda: self._copy_bubble_text(bubble))
             insert_btn.clicked.connect(lambda: self._insert_bubble_text_to_tab(bubble))
+            replace_btn.clicked.connect(lambda: self._replace_selection_with_bubble_text(bubble))
+            append_btn.clicked.connect(lambda: self._append_bubble_text_to_tab(bubble))
+            new_tab_btn.clicked.connect(lambda: self._new_tab_from_bubble_text(bubble))
+            replace_file_btn.clicked.connect(lambda: self._replace_whole_file_with_bubble_text(bubble))
+            diff_btn.clicked.connect(lambda: self._open_bubble_diff_preview(bubble))
             actions_layout.addWidget(retry_btn)
             actions_layout.addWidget(copy_btn)
             actions_layout.addWidget(insert_btn)
+            actions_layout.addWidget(replace_btn)
+            actions_layout.addWidget(append_btn)
+            actions_layout.addWidget(new_tab_btn)
+            actions_layout.addWidget(replace_file_btn)
+            actions_layout.addWidget(diff_btn)
             actions_layout.addStretch(1)
             row_layout.addWidget(actions, 0)
             row_layout.addStretch(1)
@@ -3316,6 +3186,86 @@ class AIChatDock(QDockWidget):
         if tab.text_edit.get_text().strip():
             tab.text_edit.insert_text("\n\n")
         tab.text_edit.insert_text(text)
+
+    def _replace_selection_with_bubble_text(self, bubble: _Bubble) -> None:
+        window = self.ai_controller.window
+        tab = window.active_tab()
+        if tab is None:
+            QMessageBox.information(self, "Replace Selection", "Open a tab first.")
+            return
+        if tab.text_edit.is_read_only():
+            QMessageBox.information(self, "Replace Selection", "Current tab is read-only.")
+            return
+        if not tab.text_edit.has_selection():
+            QMessageBox.information(self, "Replace Selection", "Select text first.")
+            return
+        text = bubble.text().strip()
+        if not text:
+            return
+        tab.text_edit.replace_selection(text)
+
+    def _append_bubble_text_to_tab(self, bubble: _Bubble) -> None:
+        window = self.ai_controller.window
+        tab = window.active_tab()
+        if tab is None:
+            QMessageBox.information(self, "Append", "Open a tab first.")
+            return
+        if tab.text_edit.is_read_only():
+            QMessageBox.information(self, "Append", "Current tab is read-only.")
+            return
+        text = bubble.text().strip()
+        if not text:
+            return
+        existing = tab.text_edit.get_text()
+        end_line = max(0, len(existing.splitlines()) - 1) if existing else 0
+        end_col = len(existing.splitlines()[-1]) if existing.splitlines() else 0
+        tab.text_edit.set_cursor_position(end_line, end_col)
+        if existing.strip():
+            tab.text_edit.insert_text("\n\n")
+        tab.text_edit.insert_text(text)
+
+    def _new_tab_from_bubble_text(self, bubble: _Bubble) -> None:
+        window = self.ai_controller.window
+        text = bubble.text().strip()
+        if not text:
+            return
+        if not hasattr(window, "add_new_tab"):
+            QMessageBox.information(self, "New Tab", "Couldn't create a new tab.")
+            return
+        window.add_new_tab(text=text, make_current=True)
+
+    def _replace_whole_file_with_bubble_text(self, bubble: _Bubble) -> None:
+        text = bubble.text().strip()
+        if not text:
+            return
+        self._preview_and_apply_text(
+            title="Replace Whole File",
+            proposed_text=text,
+            success_message="Replaced your current tab with the AI result (after review).",
+        )
+
+    def _open_bubble_diff_preview(self, bubble: _Bubble) -> None:
+        tab = self.ai_controller.window.active_tab()
+        if tab is None:
+            QMessageBox.information(self, "Diff Preview", "Open a tab first.")
+            return
+        if tab.text_edit.is_read_only():
+            QMessageBox.information(self, "Diff Preview", "Current tab is read-only.")
+            return
+        proposed = bubble.text().strip()
+        if not proposed:
+            return
+        original = tab.text_edit.get_text()
+        dlg = AIEditPreviewDialog(self, original, proposed, title="Bubble Diff Preview")
+        if dlg.exec() != QDialog.Accepted:
+            return
+        tab.text_edit.set_text(dlg.final_text)
+        try:
+            tab.text_edit.set_modified(True)
+        except Exception:
+            pass
+        if hasattr(self.ai_controller.window, "show_status_message"):
+            self.ai_controller.window.show_status_message("Applied changes from diff preview.", 3000)
 
     def _stop_generation(self) -> None:
         self.ai_controller.cancel_active_chat_request()

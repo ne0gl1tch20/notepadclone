@@ -1,0 +1,40 @@
+name: UI Visual Smoke
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+
+jobs:
+  visual-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYPAD_VISUAL_BASELINE_MODE: compare
+      PYPAD_VISUAL_AHASH_THRESHOLD: "6"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install test deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install PySide6 pytest
+
+      - name: Run visual smoke baseline compare
+        run: |
+          python -m pytest tests/test_ui_visual_smoke_screenshots.py -q
+
+      - name: Upload visual smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-smoke-phase2
+          path: tests_tmp/visual_smoke_phase2

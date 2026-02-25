@@ -1,5 +1,6 @@
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import QApplication, QDialog, QHBoxLayout, QPushButton, QTextEdit, QVBoxLayout
+from .theme_tokens import build_debug_logs_dialog_qss, build_dialog_theme_qss_from_tokens, build_tokens_from_settings
 
 class DebugLogsDialog(QDialog):
     def __init__(self, parent=None) -> None:
@@ -26,6 +27,12 @@ class DebugLogsDialog(QDialog):
         self.copy_button.clicked.connect(self._copy_all)
         self.clear_button.clicked.connect(self._clear_all)
         self.close_button.clicked.connect(self.close)
+        self._apply_theme_from_parent()
+
+    def _apply_theme_from_parent(self) -> None:
+        settings = getattr(self.parent(), "settings", {}) if self.parent() is not None else {}
+        tokens = build_tokens_from_settings(settings if isinstance(settings, dict) else {})
+        self.setStyleSheet(build_dialog_theme_qss_from_tokens(tokens) + "\n" + build_debug_logs_dialog_qss(tokens))
 
     def set_lines(self, lines: list[str]) -> None:
         self.logs_view.setPlainText("\n".join(lines))

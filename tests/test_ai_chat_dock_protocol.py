@@ -83,6 +83,24 @@ class AIChatDockProtocolTests(unittest.TestCase):
         self.assertIsNone(patch_offer)
         self.assertIsNone(action_offer)
 
+    def test_extract_hidden_commands_accepts_off_insert_alias(self) -> None:
+        insert_b64 = base64.b64encode("essay text".encode("utf-8")).decode("ascii")
+        text = "\n".join(
+            [
+                "Visible text",
+                "[PYPAD_CMD_OFF_INSERT_BEGIN]",
+                f"base64:{insert_b64}",
+                "[PYPAD_CMD_OFF_INSERT_END]",
+            ]
+        )
+        clean, insert_text, set_file_text, chat_title, patch_offer, action_offer = AIChatDock._extract_hidden_commands(text)
+        self.assertEqual(clean, "Visible text")
+        self.assertEqual(insert_text, "essay text")
+        self.assertEqual(set_file_text, "")
+        self.assertEqual(chat_title, "")
+        self.assertIsNone(patch_offer)
+        self.assertIsNone(action_offer)
+
     def test_apply_unified_diff_to_text(self) -> None:
         original = "alpha\nbeta\ngamma\n"
         diff_text = (

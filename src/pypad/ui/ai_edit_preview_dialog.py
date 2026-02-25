@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from .theme_tokens import build_ai_edit_preview_dialog_qss, build_dialog_theme_qss_from_tokens, build_tokens_from_settings
 
 
 @dataclass
@@ -83,6 +84,12 @@ class AIEditPreviewDialog(QDialog):
 
         self._populate_hunks()
         self._refresh_result_preview()
+        self._apply_theme_from_parent()
+
+    def _apply_theme_from_parent(self) -> None:
+        settings = getattr(self.parent(), "settings", {}) if self.parent() is not None else {}
+        tokens = build_tokens_from_settings(settings if isinstance(settings, dict) else {})
+        self.setStyleSheet(build_dialog_theme_qss_from_tokens(tokens) + "\n" + build_ai_edit_preview_dialog_qss(tokens))
 
     @staticmethod
     def _build_hunks(old_lines: list[str], new_lines: list[str]) -> list[_Hunk]:
@@ -215,6 +222,12 @@ class AIRewritePromptDialog(QDialog):
         self.mode_combo.currentTextChanged.connect(self._sync_instruction)
         generate_btn.clicked.connect(self._accept_with_instruction)
         buttons.rejected.connect(self.reject)
+        self._apply_theme_from_parent()
+
+    def _apply_theme_from_parent(self) -> None:
+        settings = getattr(self.parent(), "settings", {}) if self.parent() is not None else {}
+        tokens = build_tokens_from_settings(settings if isinstance(settings, dict) else {})
+        self.setStyleSheet(build_dialog_theme_qss_from_tokens(tokens) + "\n" + build_ai_edit_preview_dialog_qss(tokens))
 
     def _sync_instruction(self, mode: str) -> None:
         text = self._mode_prompts.get(mode, "")

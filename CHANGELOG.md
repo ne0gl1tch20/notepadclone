@@ -7,36 +7,54 @@ The format is based on Keep a Changelog, and this project uses Semantic Versioni
 ## [Unreleased]
 
 ### Added
-- Process-wide debug log capture in the Debug Logs dialog (root Python logging + `stdout`/`stderr` snapshot).
-- User-selectable global logging level in Preferences (`DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL`).
-- Extensive DEBUG instrumentation across AI chat/controller streaming, hidden command apply flows, updater, autosave, and file operations.
-- AI chat response correlation IDs (`cid`) to tie stream, parse, and apply-confirm logs together.
-- OpenAI-style AI chat attachment chips (icon + filename + remove `x`) with multi-line wrapping.
-- Hover-only AI chat message action buttons:
-  - user prompt: edit, copy
-  - assistant response: retry, copy, insert to tab
-- Rich editor right-click context menu with AI/PyPad actions, icons, quick AI row, and style submenu.
-- Large Notepad++ compatibility preferences set (multi-page) integrated into PyPad Preferences.
-- Per-language indentation override table with editable language dropdown, inline validation, and save blocking for duplicates/empty rows.
-- Reusable dialog dark/light theming helper for Qt dialogs and themed non-native file dialogs in Preferences.
+- (none yet)
 
 ### Changed
-- Preferences UI redesigned as a mixed PyPad + N++ settings hub with scope filters (`All`, `PyPad`, `N++`), page header card, descriptions/tooltips, wider nav, fixed content width, left-aligned layout, and tighter Notepad++-style navigation density.
-- N++ Dark Mode compatibility controls are embedded inside PyPad `Appearance` instead of a separate page.
-- New-document creation now applies configurable N++ compatibility defaults for encoding and EOL.
-- Runtime indentation behavior now applies N++ compatibility defaults (with per-language overrides) to new/existing tabs.
-- Print/preview now honor N++ compatibility print margins and header/footer template settings.
-- AI chat external clickable links now respect configured allowed URI schemes from Cloud & Link settings.
-- Editing a past AI chat prompt now rewrites that existing prompt and regenerates from that point (later messages are replaced for consistency).
-- AI chat now shows a plain-English warning when editing an older prompt that resending will replace later messages.
-- AI chat set-file/replace offers now show a confirmation popup before replacing the current tab contents.
-- AI chat auto-scroll now sticks to bottom only when the user is already near the bottom, while sends still force-scroll to latest messages.
-- `Recover Unsaved Notes` dialog now follows app dark/light theme and accent color.
+- (none yet)
 
 ### Fixed
-- Preferences translation crash when translating `QGroupBox` titles (`title()`/`setTitle()` instead of `.text()`).
-- Startup autosave recovery dialog not appearing in the Windows taskbar when shown before the main window.
-- Fixed AI chat streaming callbacks updating Qt widgets/timers from a worker thread, which could cause the app to stop responding or close during AI replies.
+- (none yet)
+
+## [1.7.4-prerelease] - 2026-02-26
+
+- A BIG UPDATE! (yet!)
+
+### Added
+- Shared token-based UI theme system used across main window chrome, dialogs, Quick Open, and AI Chat surfaces.
+- Quick Open / Go to Anything upgrades:
+  - `@symbol`, `@@symbol`, `@w symbol`, and scoped `@@filepattern symbol`
+  - background file/symbol indexing and persistent caches
+  - grouped result sections and `Tab` / `Shift+Tab` mode cycling
+  - live incremental refresh while indexing
+- AI chat bubble one-click actions:
+  - Insert / Replace Selection / Append / New Tab
+  - Replace Whole File
+  - Open Diff Preview
+- Visual UI regression tooling:
+  - offscreen screenshot smoke captures
+  - HTML manifest (`tests_tmp/visual_smoke_phase2/index.html`)
+  - baseline compare/update mode with perceptual hash threshold
+  - committed baseline file and CI gate
+- CI workflow split for UI checks:
+  - fast UI theme/dialog tests
+  - runtime smoke
+  - visual smoke baseline compare
+- `scripts/run_ui_checks.ps1` wrapper for local split UI checks (`-Fast`, `-Runtime`, `-Visual`, `-All`).
+
+### Changed
+- App UI overhauled to a soft modern rounded style across core chrome:
+  - tabs, toolbars, menus, docks, status bar, scrollbars
+- High-traffic dialogs and panels aligned to the new theme language:
+  - Settings, Tutorial, Autosave, Workspace dialogs, AI edit preview/rewrite, Debug Logs, updater dialogs
+- Additional custom/niche dialogs now use shared dialog theming (Windows Manager, macro run dialog, open-source licenses, clipboard/jump/search results/history panels, user guide, document summary, and others).
+- `User Defined Language` dialog now uses token-based dialog styling instead of a local hardcoded dark/light stylesheet.
+- `main_window` package export changed to lazy `Notepad` import to avoid circular import issues in UI tests/fixtures.
+
+### Fixed
+- AI chat insert-offer parsing now accepts `OFF_INSERT` alias tokens in addition to `OFFER_INSERT`.
+- `apply_settings()` hover-mode tab-close theming ordering bug (`tab_close_icon_url` used before assignment).
+- `apply_settings()` hover close-button QSS f-string brace escaping bug causing runtime `NameError` in hover mode.
+- Quick Open incremental refresh now detects same-count updates using content signatures/hashes.
 
 ## [1.7.2-prerelease] - 2026-02-21
 

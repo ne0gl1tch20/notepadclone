@@ -1,4 +1,4 @@
-# Literally my biggest script ever
+﻿# Literally my biggest script ever
 from __future__ import annotations
 import getpass
 import importlib.metadata as importlib_metadata
@@ -12,6 +12,7 @@ import sys
 import time
 import webbrowser
 import subprocess
+import threading
 from typing import TYPE_CHECKING, Any
 from datetime import datetime
 from pathlib import Path
@@ -107,7 +108,8 @@ from ..syntax_highlighter import CodeSyntaxHighlighter
 from ..updater_controller import UpdaterController
 from ..version_history import VersionEntry, VersionHistoryDialog
 from ..workspace_controller import WorkspaceController
-from ..dialog_theme import ensure_dialog_theme_filter_installed
+from ..dialog_theme import apply_dialog_theme_from_window, ensure_dialog_theme_filter_installed
+from ..theme_tokens import build_main_window_qss, build_tokens_from_settings
 from ..session_recovery import local_history_key
 from ..advanced_text_tools import build_line_refs, export_line_refs_text
 from ..document_fidelity import DocumentFidelityError, export_document_text, render_text_to_html
@@ -132,6 +134,7 @@ from .settings_dialog import SettingsDialog as SidebarSettingsDialog
 from ..tutorial_dialog import InteractiveTutorialDialog
 from ..shortcut_mapper import PRESET_SHORTCUTS, ShortcutActionRow, ShortcutMapperDialog, parse_shortcut_value, sequence_to_string
 from ..command_palette import CommandPaletteDialog, PaletteItem
+from ..quick_open_dialog import QuickOpenDialog, QuickOpenEntry, extract_symbol_rows
 from ...i18n.translator import language_code_for
 
 
@@ -553,6 +556,7 @@ class MiscMixin:
         dialog = QDialog(self)
         dialog.setWindowTitle(f"Windows - Total documents: {self.tab_widget.count()}")
         dialog.resize(760, 520)
+        apply_dialog_theme_from_window(self, dialog)
 
         root = QHBoxLayout(dialog)
         table = QTableWidget(dialog)
@@ -1497,6 +1501,7 @@ class MiscMixin:
         dialog = QDialog(self)
         dialog.setWindowTitle("Run a Macro Multiple Times")
         dialog.setModal(True)
+        apply_dialog_theme_from_window(self, dialog)
 
         root = QVBoxLayout(dialog)
         macro_group = QGroupBox("Macro to run", dialog)
@@ -1904,6 +1909,7 @@ class MiscMixin:
         dlg = QDialog(self)
         dlg.setWindowTitle("Column Editor")
         dlg.resize(420, 320)
+        apply_dialog_theme_from_window(self, dlg)
         root = QVBoxLayout(dlg)
 
         text_radio = QRadioButton("Text to Insert")
@@ -2054,6 +2060,7 @@ class MiscMixin:
         dlg = QDialog(self)
         dlg.setWindowTitle("Character Panel")
         dlg.resize(520, 420)
+        apply_dialog_theme_from_window(self, dlg)
         layout = QVBoxLayout(dlg)
         table = QTableWidget(dlg)
         table.setColumnCount(3)
@@ -2660,6 +2667,7 @@ class MiscMixin:
         dlg = QDialog(self)
         dlg.setWindowTitle("Clipboard History")
         dlg.resize(760, 420)
+        apply_dialog_theme_from_window(self, dlg)
         lay = QVBoxLayout(dlg)
         table = QTableWidget(dlg)
         table.setColumnCount(2)
@@ -3081,6 +3089,7 @@ class MiscMixin:
         dlg = QDialog(self)
         dlg.setWindowTitle("Batch AI Refactor Plan")
         dlg.resize(920, 620)
+        apply_dialog_theme_from_window(self, dlg)
         layout = QVBoxLayout(dlg)
         top = QLabel(f"Instruction: {instruction}", dlg)
         top.setWordWrap(True)
@@ -3504,7 +3513,407 @@ class MiscMixin:
         )
         self._send_ai_chat_prompt(prompt=prompt, visible_prompt="Review Workspace Snippets (Citations)")
 
-    def open_command_palette(self) -> None:
+    def _quick_open_entries(self) -> list[QuickOpenEntry]:
+        entries: list[QuickOpenEntry] = []
+        seen_paths: set[str] = set()
+
+        for i in range(self.tab_widget.count()):
+            widget = self.tab_widget.widget(i)
+            if not isinstance(widget, EditorTab):
+                continue
+            title = self.tab_widget.tabText(i).strip() or f"Tab {i + 1}"
+            path = str(widget.current_file or "").strip() or None
+            subtitle = path or "Unsaved tab"
+            entries.append(
+                QuickOpenEntry(
+                    kind="open_tab",
+                    label=title,
+                    subtitle=subtitle,
+                    tab_index=i,
+                    path=path,
+                    source="Open Tab",
+                )
+            )
+            if path:
+                seen_paths.add(os.path.normcase(os.path.abspath(path)))
+
+        for raw_path in self.settings.get("recent_files", []):
+            path = str(raw_path or "").strip()
+            if not path:
+                continue
+            norm = os.path.normcase(os.path.abspath(path))
+            if norm in seen_paths:
+                continue
+            seen_paths.add(norm)
+            entries.append(
+                QuickOpenEntry(
+                    kind="file",
+                    label=Path(path).name or path,
+                    subtitle=path,
+                    path=path,
+                    source="Recent",
+                )
+            )
+
+        for item in self._quick_open_workspace_entries_cached():
+            path = str(item.path or "").strip()
+            if path:
+                norm = os.path.normcase(os.path.abspath(path))
+                if norm in seen_paths:
+                    continue
+                seen_paths.add(norm)
+            entries.append(item)
+        return entries
+
+    def _quick_open_workspace_entries_cached(self) -> list[QuickOpenEntry]:
+        root = str(self._workspace_root() or "").strip()
+        if not root:
+            return []
+        now = time.time()
+        cache_root = str(getattr(self, "_quick_open_cache_root", "") or "")
+        cache_items = list(getattr(self, "_quick_open_workspace_cache", []) or [])
+        built_at = float(getattr(self, "_quick_open_cache_built_at", 0.0) or 0.0)
+        if cache_root != root:
+            self._quick_open_cache_root = root
+            self._quick_open_workspace_cache = []
+            self._quick_open_cache_built_at = 0.0
+            self._quick_open_indexing = False
+            cache_items = []
+            built_at = 0.0
+        if not cache_items:
+            raw_cache = self.settings.get("quick_open_workspace_index_cache", {})
+            if isinstance(raw_cache, dict) and str(raw_cache.get("root", "") or "") == root:
+                raw_items = raw_cache.get("items", [])
+                if isinstance(raw_items, list):
+                    restored: list[QuickOpenEntry] = []
+                    for item in raw_items[:5000]:
+                        if not isinstance(item, dict):
+                            continue
+                        path = str(item.get("path", "") or "").strip()
+                        label = str(item.get("label", "") or "").strip()
+                        subtitle = str(item.get("subtitle", "") or "").strip()
+                        if not path or not label:
+                            continue
+                        restored.append(
+                            QuickOpenEntry(
+                                kind="file",
+                                label=label,
+                                subtitle=subtitle or path,
+                                path=path,
+                                source="Workspace",
+                            )
+                        )
+                    if restored:
+                        self._quick_open_workspace_cache = restored
+                        self._quick_open_cache_root = root
+                        self._quick_open_cache_built_at = float(raw_cache.get("built_at", 0.0) or 0.0)
+                        cache_items = restored
+                        built_at = self._quick_open_cache_built_at
+        self._schedule_quick_open_index_refresh()
+        if cache_items and (now - built_at) < 30.0:
+            return cache_items
+        return cache_items
+
+    def _schedule_quick_open_index_refresh(self) -> None:
+        if bool(getattr(self, "_quick_open_indexing", False)):
+            return
+        root = str(self._workspace_root() or "").strip()
+        if not root:
+            return
+        self._quick_open_indexing = True
+
+        def _build() -> list[QuickOpenEntry]:
+            out: list[QuickOpenEntry] = []
+            try:
+                root_path = Path(root)
+                if not root_path.exists():
+                    return []
+                skip_dirs = {".git", "__pycache__", ".pytest_cache", "dist", "build", "tests_tmp", ".venv", "venv"}
+                count = 0
+                for dirpath, dirnames, filenames in os.walk(root):
+                    dirnames[:] = [d for d in dirnames if d not in skip_dirs and not d.startswith(".mypy")]
+                    for name in filenames:
+                        full = str(Path(dirpath) / name)
+                        try:
+                            rel = str(Path(full).relative_to(root_path))
+                        except Exception:
+                            rel = full
+                        out.append(
+                            QuickOpenEntry(
+                                kind="file",
+                                label=name,
+                                subtitle=rel,
+                                path=full,
+                                source="Workspace",
+                            )
+                        )
+                        count += 1
+                        if count >= 5000:
+                            return out
+            except Exception:
+                _LOGGER.exception("quick open workspace scan failed root=%s", root)
+            return out
+
+        def _worker() -> None:
+            items = _build()
+            def _apply() -> None:
+                self._quick_open_workspace_cache = items
+                self._quick_open_cache_root = root
+                self._quick_open_cache_built_at = time.time()
+                self._quick_open_indexing = False
+                self.settings["quick_open_workspace_index_cache"] = {
+                    "root": root,
+                    "built_at": self._quick_open_cache_built_at,
+                    "items": [
+                        {
+                            "path": str(x.path or ""),
+                            "label": x.label,
+                            "subtitle": x.subtitle,
+                        }
+                        for x in items[:5000]
+                        if isinstance(x, QuickOpenEntry) and x.path
+                    ],
+                }
+                try:
+                    self.save_settings_to_disk()
+                except Exception:
+                    pass
+            try:
+                QTimer.singleShot(0, _apply)
+            except Exception:
+                _apply()
+
+        threading.Thread(target=_worker, name="pypad-quick-open-index", daemon=True).start()
+
+    def _quick_open_current_symbols(self) -> list[QuickOpenEntry]:
+        tab = self.active_tab()
+        if tab is None:
+            return []
+        try:
+            language = self._detect_language_for_tab(tab)
+            text = tab.text_edit.get_text()
+        except Exception:
+            return []
+        rows = extract_symbol_rows(language, text)
+        tab_label = self._tab_display_name(tab)
+        return [
+            QuickOpenEntry(
+                kind="symbol",
+                label=title,
+                subtitle=f"{tab_label} : line {line_no}",
+                path=tab.current_file,
+                source="Symbol",
+                line=line_no,
+            )
+            for line_no, title in rows
+        ]
+
+    def _schedule_workspace_symbol_index_refresh(self) -> None:
+        if bool(getattr(self, "_quick_open_workspace_symbol_indexing", False)):
+            return
+        root = str(self._workspace_root() or "").strip()
+        if not root:
+            return
+        self._quick_open_workspace_symbol_indexing = True
+
+        def _guess_lang(path: str) -> str:
+            suffix = Path(path).suffix.lower()
+            return {
+                ".py": "python",
+                ".md": "markdown",
+                ".markdown": "markdown",
+                ".mdown": "markdown",
+            }.get(suffix, "plain")
+
+        def _build() -> list[QuickOpenEntry]:
+            out: list[QuickOpenEntry] = []
+            file_entries = list(getattr(self, "_quick_open_workspace_cache", []) or [])
+            if not file_entries:
+                file_entries = self._quick_open_workspace_entries_cached()
+            scanned_files = 0
+            for entry in file_entries:
+                if not isinstance(entry, QuickOpenEntry) or not entry.path:
+                    continue
+                path = str(entry.path)
+                suffix = Path(path).suffix.lower()
+                if suffix not in {".py", ".md", ".markdown", ".mdown", ".js", ".ts", ".txt"}:
+                    continue
+                try:
+                    if Path(path).stat().st_size > 512_000:
+                        continue
+                    text = Path(path).read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    continue
+                lang = _guess_lang(path)
+                rows = extract_symbol_rows(lang, text)
+                rel = entry.subtitle or path
+                for line_no, title in rows[:200]:
+                    out.append(
+                        QuickOpenEntry(
+                            kind="symbol_workspace",
+                            label=title,
+                            subtitle=f"{rel} : line {line_no}",
+                            path=path,
+                            source="Workspace Symbol",
+                            line=line_no,
+                        )
+                    )
+                    if len(out) >= 6000:
+                        return out
+                scanned_files += 1
+                if scanned_files >= 1200:
+                    break
+            return out
+
+        def _worker() -> None:
+            items = _build()
+            def _apply() -> None:
+                self._quick_open_workspace_symbol_cache = items
+                self._quick_open_workspace_symbol_cache_root = root
+                self._quick_open_workspace_symbol_cache_built_at = time.time()
+                self._quick_open_workspace_symbol_indexing = False
+                self.settings["quick_open_workspace_symbol_index_cache"] = {
+                    "root": root,
+                    "built_at": self._quick_open_workspace_symbol_cache_built_at,
+                    "items": [
+                        {
+                            "path": str(x.path or ""),
+                            "label": x.label,
+                            "subtitle": x.subtitle,
+                            "line": int(x.line or 0),
+                        }
+                        for x in items[:6000]
+                        if isinstance(x, QuickOpenEntry) and x.path and x.line
+                    ],
+                }
+                try:
+                    self.save_settings_to_disk()
+                except Exception:
+                    pass
+            try:
+                QTimer.singleShot(0, _apply)
+            except Exception:
+                _apply()
+
+        threading.Thread(target=_worker, name="pypad-quick-open-symbol-index", daemon=True).start()
+
+    def _quick_open_workspace_symbols_cached(self) -> list[QuickOpenEntry]:
+        root = str(self._workspace_root() or "").strip()
+        if not root:
+            return []
+        cache_root = str(getattr(self, "_quick_open_workspace_symbol_cache_root", "") or "")
+        cache_items = list(getattr(self, "_quick_open_workspace_symbol_cache", []) or [])
+        built_at = float(getattr(self, "_quick_open_workspace_symbol_cache_built_at", 0.0) or 0.0)
+        if cache_root != root:
+            self._quick_open_workspace_symbol_cache_root = root
+            self._quick_open_workspace_symbol_cache = []
+            self._quick_open_workspace_symbol_cache_built_at = 0.0
+            self._quick_open_workspace_symbol_indexing = False
+            cache_items = []
+            built_at = 0.0
+        if not cache_items:
+            raw_cache = self.settings.get("quick_open_workspace_symbol_index_cache", {})
+            if isinstance(raw_cache, dict) and str(raw_cache.get("root", "") or "") == root:
+                raw_items = raw_cache.get("items", [])
+                if isinstance(raw_items, list):
+                    restored: list[QuickOpenEntry] = []
+                    for item in raw_items[:6000]:
+                        if not isinstance(item, dict):
+                            continue
+                        path = str(item.get("path", "") or "").strip()
+                        label = str(item.get("label", "") or "").strip()
+                        subtitle = str(item.get("subtitle", "") or "").strip()
+                        line_no = int(item.get("line", 0) or 0)
+                        if not path or not label or line_no <= 0:
+                            continue
+                        restored.append(
+                            QuickOpenEntry(
+                                kind="symbol_workspace",
+                                label=label,
+                                subtitle=subtitle or path,
+                                path=path,
+                                source="Workspace Symbol",
+                                line=line_no,
+                            )
+                        )
+                    if restored:
+                        self._quick_open_workspace_symbol_cache = restored
+                        self._quick_open_workspace_symbol_cache_root = root
+                        self._quick_open_workspace_symbol_cache_built_at = float(raw_cache.get("built_at", 0.0) or 0.0)
+                        cache_items = restored
+                        built_at = self._quick_open_workspace_symbol_cache_built_at
+        self._schedule_workspace_symbol_index_refresh()
+        if cache_items and (time.time() - built_at) < 45.0:
+            return cache_items
+        return cache_items
+
+    def _quick_open_status_text(self) -> str:
+        parts: list[str] = []
+        if bool(getattr(self, "_quick_open_indexing", False)):
+            parts.append("Indexing workspace...")
+        if bool(getattr(self, "_quick_open_workspace_symbol_indexing", False)):
+            parts.append("Symbols indexing...")
+        if not parts:
+            return ""
+        return " | ".join(parts)
+
+    def _quick_open_apply_selection(self, entry: QuickOpenEntry, *, line: int | None, col: int | None) -> None:
+        if entry.kind == "open_tab":
+            target_idx = entry.tab_index
+            if isinstance(target_idx, int) and 0 <= target_idx < self.tab_widget.count():
+                self.tab_widget.setCurrentIndex(target_idx)
+            tab = self.active_tab()
+            if tab is not None and line is not None:
+                tab.text_edit.set_cursor_position(max(0, line - 1), max(0, (col or 1) - 1))
+            return
+        if entry.kind == "symbol":
+            tab = self.active_tab()
+            target_line = int(entry.line or 1)
+            if tab is not None:
+                tab.text_edit.set_cursor_position(max(0, target_line - 1), max(0, (col or 1) - 1))
+            return
+        if entry.kind == "symbol_workspace" and entry.path:
+            if not self._open_file_path(entry.path):
+                return
+            tab = self.active_tab()
+            target_line = int(entry.line or 1)
+            if tab is not None:
+                tab.text_edit.set_cursor_position(max(0, target_line - 1), max(0, (col or 1) - 1))
+            return
+        if entry.kind == "file" and entry.path:
+            if not self._open_file_path(entry.path):
+                return
+            tab = self.active_tab()
+            if tab is not None and line is not None:
+                tab.text_edit.set_cursor_position(max(0, line - 1), max(0, (col or 1) - 1))
+
+    def open_quick_open(self) -> None:
+        current_label = ""
+        idx = self.tab_widget.currentIndex()
+        if idx >= 0:
+            current_label = self.tab_widget.tabText(idx).strip()
+        dialog = QuickOpenDialog(
+            self,
+            self._quick_open_entries(),
+            current_tab_label=current_label,
+            current_symbols=self._quick_open_current_symbols(),
+            workspace_symbols=self._quick_open_workspace_symbols_cached(),
+            status_provider=self._quick_open_status_text,
+            items_provider=self._quick_open_entries,
+            current_symbols_provider=self._quick_open_current_symbols,
+            workspace_symbols_provider=self._quick_open_workspace_symbols_cached,
+        )
+        if dialog.exec() != QDialog.Accepted:
+            return
+        if dialog.command_query is not None:
+            self.open_command_palette(initial_query=dialog.command_query)
+            return
+        entry = dialog.selected_entry
+        if entry is None:
+            return
+        self._quick_open_apply_selection(entry, line=dialog.selected_line, col=dialog.selected_col)
+
+    def open_command_palette(self, initial_query: str = "") -> None:
         actions: list[PaletteItem] = []
         for entry in discover_window_actions(self):
             actions.append(
@@ -3516,7 +3925,7 @@ class MiscMixin:
                     keywords=f"{entry.action_id} {entry.section}",
                 )
             )
-        dialog = CommandPaletteDialog(self, actions)
+        dialog = CommandPaletteDialog(self, actions, initial_query=initial_query)
         if dialog.exec() != QDialog.Accepted or dialog.selected_action is None:
             return
         dialog.selected_action.trigger()
@@ -3622,6 +4031,7 @@ class MiscMixin:
         dlg = QDialog(self)
         dlg.setWindowTitle("AI Action History")
         dlg.resize(780, 480)
+        apply_dialog_theme_from_window(self, dlg)
         v = QVBoxLayout(dlg)
         view = QTextEdit(dlg)
         view.setReadOnly(True)
@@ -4201,269 +4611,39 @@ class MiscMixin:
             self.snap_dock_right_action.setShortcut(QKeySequence("Ctrl+Alt+Right") if enable_snap else QKeySequence())
             self.snap_dock_bottom_action.setShortcut(QKeySequence("Ctrl+Alt+Down") if enable_snap else QKeySequence())
 
-        # Theming: apply dark mode, presets, and optional custom overrides.
-        theme = self.settings.get("theme", "Default")
-        palette_map = {
-            "Default": {"window_bg": "#ffffff", "text_color": "#000000", "chrome_bg": "#f0f0f0"},
-            "Soft Light": {"window_bg": "#f5f5f7", "text_color": "#222222", "chrome_bg": "#e1e1e6"},
-            "High Contrast": {"window_bg": "#000000", "text_color": "#ffffff", "chrome_bg": "#000000"},
-            "Solarized Light": {"window_bg": "#fdf6e3", "text_color": "#586e75", "chrome_bg": "#eee8d5"},
-            "Ocean Blue": {"window_bg": "#eaf4ff", "text_color": "#10324a", "chrome_bg": "#d6e9fb"},
-        }
-
-        if self.settings.get("dark_mode"):
-            window_bg = "#202124"
-            text_color = "#e8eaed"
-            chrome_bg = "#303134"
-            scrollbar_border = "#3c4043"
-            scrollbar_handle = "#5f6368"
-            scrollbar_hover = "#80868b"
-            selection_bg = "#3c4043"
-            toolbar_checked_bg = "#3a3f45"
-            toolbar_checked_hover_bg = "#444a51"
-            tab_hover_bg = "#3a3f45"
-            dock_button_bg = "#3a3f45"
-            dock_button_hover_bg = "#444a51"
-            dock_button_pressed_bg = "#2d3136"
-        else:
-            palette = palette_map.get(theme, palette_map["Default"])
-            window_bg = palette["window_bg"]
-            text_color = palette["text_color"]
-            chrome_bg = palette["chrome_bg"]
-            scrollbar_border = "#c0c0c0"
-            scrollbar_handle = "#aeb6c0"
-            scrollbar_hover = "#8f98a4"
-            selection_bg = "#cce0ff"
-            toolbar_checked_bg = "#eceff5"
-            toolbar_checked_hover_bg = "#e4e9f2"
-            tab_hover_bg = "#e9eef7"
-            dock_button_bg = "#f3f6fb"
-            dock_button_hover_bg = "#e6edf8"
-            dock_button_pressed_bg = "#d9e3f3"
-
-        accent_color = self._normalize_hex_color(self.settings.get("accent_color", "")) or "#4a90e2"
-        toolbar_hover_bg = accent_color
+        # Theming: token-driven soft modern chrome while preserving existing settings.
+        tokens = build_tokens_from_settings(self.settings)
         density = str(self.settings.get("ui_density", "comfortable"))
-        tool_padding = "2px 4px" if density == "compact" else "3px 6px"
-        close_button_visibility_qss = ""
-        if str(self.settings.get("tab_close_button_mode", "always")) == "hover":
-            close_button_visibility_qss = f"""
-            QTabBar::close-button {
-                image: none;
-                background: transparent;
-                border: none;
-            }
-            QTabBar::tab:hover QTabBar::close-button {
-                image: url("{tab_close_icon_url}");
-                background: #d13438;
-                border: 1px solid #b72b2f;
-                border-radius: 2px;
-            }
-            """
-        if self.settings.get("use_custom_colors"):
-            custom_editor_bg = self._normalize_hex_color(self.settings.get("custom_editor_bg", ""))
-            custom_editor_fg = self._normalize_hex_color(self.settings.get("custom_editor_fg", ""))
-            custom_chrome_bg = self._normalize_hex_color(self.settings.get("custom_chrome_bg", ""))
-            if custom_editor_bg:
-                window_bg = custom_editor_bg
-            if custom_editor_fg:
-                text_color = custom_editor_fg
-            if custom_chrome_bg:
-                chrome_bg = custom_chrome_bg
-        chrome_color = QColor(chrome_bg)
-        if chrome_color.isValid():
-            self._icon_color = QColor("#000000" if chrome_color.lightnessF() >= 0.55 else "#ffffff")
-        else:
-            self._icon_color = QColor("#ffffff" if self.settings.get("dark_mode") else "#000000")
-
         tab_close_icon_name = "tab-close-dark.svg" if self.settings.get("dark_mode") else "tab-close-light.svg"
         tab_close_icon_path = resolve_asset_path("icons", tab_close_icon_name) or resolve_asset_path("icons", "tab-close.svg")
         tab_close_icon_url = tab_close_icon_path.as_posix() if tab_close_icon_path else ""
 
-        qss = f"""
-            QMainWindow {{
-                background-color: {window_bg};
-                color: {text_color};
-            }}
-            QTextEdit {{
-                background-color: {window_bg};
-                color: {text_color};
-                selection-background-color: {selection_bg};
-                selection-color: {text_color};
-                border: 1px solid {accent_color};
-            }}
-            QMenuBar, QMenu, QStatusBar, QToolBar {{
-                background-color: {chrome_bg};
-                color: {text_color};
-            }}
-            QMenuBar {{
-                border-bottom: 1px solid {scrollbar_border};
-            }}
-            QMenuBar::item:selected, QMenu::item:selected {{
-                background: {accent_color};
-                color: #ffffff;
-            }}
-            QToolBar {{
-                border-top: 1px solid {scrollbar_border};
-                border-bottom: 1px solid {scrollbar_border};
-                spacing: 2px;
-            }}
-            QDockWidget::title {{
-                background: {chrome_bg};
-                color: {text_color};
-                border: 1px solid {scrollbar_border};
-                padding: 4px 6px;
-                text-align: left;
-            }}
-            QDockWidget::close-button,
-            QDockWidget::float-button {{
-                background: {dock_button_bg};
-                border: 1px solid {scrollbar_border};
-                border-radius: 2px;
-                padding: 0px;
-                margin: 1px;
-            }}
-            QDockWidget::close-button:hover,
-            QDockWidget::float-button:hover {{
-                background: {dock_button_hover_bg};
-                border: 1px solid {accent_color};
-            }}
-            QDockWidget::close-button:pressed,
-            QDockWidget::float-button:pressed {{
-                background: {dock_button_pressed_bg};
-            }}
-            QToolButton {{
-                color: {text_color};
-                background: transparent;
-                border: 1px solid transparent;
-                padding: {tool_padding};
-            }}
-            QToolButton:hover {{
-                background: {toolbar_hover_bg};
-                color: #ffffff;
-                border: 1px solid {accent_color};
-            }}
-            QToolButton:pressed {{
-                background: {accent_color};
-                color: #ffffff;
-            }}
-            QToolButton:checked {{
-                background: {toolbar_checked_bg};
-                color: {text_color};
-                border: 1px solid {accent_color};
-            }}
-            QToolButton:checked:hover {{
-                background: {toolbar_checked_hover_bg};
-                color: {text_color};
-                border: 1px solid {accent_color};
-            }}
-            QToolBar QLabel,
-            QToolBar QCheckBox {{
-                color: {text_color};
-                background: transparent;
-            }}
-            QToolBar QLineEdit {{
-                background: {window_bg};
-                color: {text_color};
-                border: 1px solid {scrollbar_border};
-                min-height: 22px;
-            }}
-            QToolBar QPushButton {{
-                background: {chrome_bg};
-                color: {text_color};
-                border: 1px solid {scrollbar_border};
-                min-height: 22px;
-                padding: 2px 10px;
-            }}
-            QToolBar QPushButton:hover {{
-                background: {accent_color};
-                color: #ffffff;
-                border: 1px solid {accent_color};
-            }}
-            QToolBar QPushButton:pressed {{
-                background: {accent_color};
-                color: #ffffff;
-            }}
-            QStatusBar QLabel, QStatusBar::item {{
-                color: {text_color};
-            }}
-            QStatusBar QComboBox {{
-                background: {chrome_bg};
-                color: {text_color};
-                border: 1px solid {scrollbar_border};
-                padding: 1px 4px;
-            }}
-            QStatusBar QComboBox QAbstractItemView {{
-                background: {window_bg};
-                color: {text_color};
-                selection-background-color: {accent_color};
-                selection-color: #ffffff;
-            }}
-            QTabWidget::pane {{
-                border: 1px solid {scrollbar_border};
-                background: {chrome_bg};
-            }}
-            QTabBar::tab {{
-                background: {chrome_bg};
-                color: {text_color};
-                border: 1px solid {scrollbar_border};
-                padding: 6px 52px 6px 10px;
-                margin-right: 2px;
-                min-height: 22px;
-            }}
+        close_button_visibility_qss = ""
+        if str(self.settings.get("tab_close_button_mode", "always")) == "hover":
+            close_button_visibility_qss = f"""
             QTabBar::close-button {{
-                subcontrol-position: right;
-                subcontrol-origin: padding;
-                margin-right: 4px;
-                margin-top: 0px;
-                margin-left: 6px;
-                width: 14px;
-                height: 14px;
+                image: none;
+                background: transparent;
+                border: none;
+            }}
+            QTabBar::tab:hover QTabBar::close-button {{
                 image: url("{tab_close_icon_url}");
                 background: #d13438;
                 border: 1px solid #b72b2f;
-                border-radius: 2px;
+                border-radius: {tokens.radius_sm}px;
             }}
-            QTabBar::close-button:hover {{
-                background: #e74856;
-                border: 1px solid #c8373c;
-            }}
-            QTabBar::close-button:pressed {{
-                background: #a4262c;
-                border: 1px solid #8f1f24;
-            }}
-            {close_button_visibility_qss}
-            QTabBar::tab:selected {{
-                background: {window_bg};
-                color: {text_color};
-                font-weight: 600;
-                border: 1px solid {scrollbar_border};
-            }}
-            QTabBar::tab:hover {{
-                background: {tab_hover_bg};
-                color: {text_color};
-            }}
-            QScrollBar:vertical, QScrollBar:horizontal {{
-                background: {window_bg};
-                border: 1px solid {scrollbar_border};
-                margin: 0px;
-            }}
-            QScrollBar::handle:vertical, QScrollBar::handle:horizontal {{
-                background: {scrollbar_handle};
-                min-height: 20px;
-                min-width: 20px;
-                border-radius: 4px;
-            }}
-            QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {{
-                background: {scrollbar_hover};
-            }}
-            QScrollBar::add-line, QScrollBar::sub-line {{
-                background: {window_bg};
-                border: none;
-                width: 0px;
-                height: 0px;
-            }}
-        """
+            """
+        chrome_color = QColor(tokens.chrome_bg)
+        if chrome_color.isValid():
+            self._icon_color = QColor(tokens.icon_fg)
+        else:
+            self._icon_color = QColor("#ffffff" if self.settings.get("dark_mode") else "#000000")
+
+        qss = build_main_window_qss(
+            tokens=tokens,
+            tab_close_icon_url=tab_close_icon_url,
+            close_button_visibility_qss=close_button_visibility_qss,
+        )
         if app is not None:
             app.setStyleSheet(qss)
         else:
@@ -4679,6 +4859,7 @@ class MiscMixin:
         dlg = QDialog(self)
         dlg.setWindowTitle("Jump History")
         dlg.resize(700, 420)
+        apply_dialog_theme_from_window(self, dlg)
         layout = QVBoxLayout(dlg)
         list_widget = QListWidget(dlg)
         for idx, entry in enumerate(history):
@@ -5323,6 +5504,7 @@ class MiscMixin:
         dlg = QDialog(self)
         dlg.setWindowTitle("Marks/Bookmarks Panel")
         dlg.resize(840, 560)
+        apply_dialog_theme_from_window(self, dlg)
         layout = QVBoxLayout(dlg)
 
         options_row = QHBoxLayout()
@@ -6028,6 +6210,7 @@ class MiscMixin:
         query = str(getattr(self, "_search_results_query", "") or "")
         dlg.setWindowTitle("Search Results")
         dlg.resize(900, 540)
+        apply_dialog_theme_from_window(self, dlg)
         layout = QVBoxLayout(dlg)
         header = QLabel(f"Query: {query} ({len(items)} result(s))", dlg)
         layout.addWidget(header)
@@ -6418,6 +6601,7 @@ class MiscMixin:
         dialog = QDialog(self)
         dialog.setWindowTitle("Open Source Licenses")
         dialog.resize(900, 640)
+        apply_dialog_theme_from_window(self, dialog)
         layout = QVBoxLayout(dialog)
         layout.addWidget(QLabel("Installed Python libraries and declared license metadata", dialog))
         output = QTextEdit(dialog)
@@ -6484,64 +6668,71 @@ class MiscMixin:
 
     def show_user_guide(self) -> None:
         guide_text = """
-Pypad User Guide 📘
+Pypad User Guide
 
-1. Core Editing ✍️
+1. Core Editing
 - New/Open/Save/Save As are in File menu.
 - Drag a text file into the app to open it.
 - Use Ctrl+F for search panel, F3/Shift+F3 for next/previous.
+- Ctrl+Shift+P opens the Command Palette.
 
-2. Tabs 🗂️
+2. Tabs and Navigation
 - Middle-click any tab to close it.
 - Pin Tab keeps important tabs grouped at the top.
 - Favorite Tab marks important files and lists them under File > Favorite Files.
+- Ctrl+Alt+P opens Quick Open / Go to Anything.
+- Quick Open supports file/path search, :line[:col], @symbol, @@workspace-symbol, and >command.
 
-3. Markdown and Code 🧠
+3. Markdown and Code
 - Use Format > Markdown for headings, lists, links, tables.
 - Live Markdown Preview toggles side-by-side preview.
-- Syntax language picker is in status bar.
+- Syntax language picker is in the status bar.
 
-4. Versioning and Recovery ♻️
+4. Versioning and Recovery
 - Version History restores earlier snapshots and shows diffs.
 - Autosave periodically captures unsaved changes.
 - On startup, crash recovery offers unsaved autosave drafts.
 
-5. Reminders and Tasks ⏰
+5. Reminders and Tasks
 - Reminders & Alarms let you schedule alerts, recurrence, and snooze.
 - Checklist shortcuts can toggle - [ ] and - [x] tasks.
 
-6. Templates and Export 📤
+6. Templates and Export
 - File > Templates inserts meeting, daily log, and checklist templates.
 - File > Export supports PDF, Markdown, HTML, DOCX, and ODT.
 
-7. Workspace 📁
-- File > Workspace > Open Workspace Folder sets active project folder.
+7. Workspace
+- File > Workspace > Open Workspace Folder sets the active project folder.
 - Browse files via Workspace Files.
-- Search across workspace with Search Workspace.
+- Search across the workspace with Search Workspace.
 
-8. Security 🔐
+8. Security
 - File > Security enables per-note encryption.
 - Use .encnote extension for encrypted note files.
 - Open encrypted notes by entering the note password.
 
-9. AI Features 🤖
+9. AI Features
 - File > AI > Ask AI for general prompts.
 - Explain Selection with AI explains selected text.
-- AI Inline Edit (Preview) edits selection/paragraph with hunk-level accept/reject.
-- Ask Workspace (Citations) answers from workspace excerpts with file+line citations.
-- AI Chat Panel (left dock) supports prompt/response bubbles with live generation.
-- AI results open in a panel with Copy / Insert / Replace Selection.
+- AI Inline Edit (Preview) supports hunk-level accept/reject.
+- Ask Workspace (Citations) answers from workspace excerpts with file/line citations.
+- AI Chat Panel supports prompt/response bubbles with live generation.
+- Assistant responses can offer Insert / Replace / Append / New Tab / Replace File / Diff actions.
 - Configure API key and model in Settings > AI & Updates.
-- Tools > Collaboration Presence shows active clients and revision state.
-- Tools > Resolve Collaboration Conflict supports shared/local/merge-marker/AI-merge workflows.
+- Tools > Collaboration Presence and conflict-resolution tools support shared editing workflows.
 
-10. Updates 🚀
+10. Updates
 - Help > Check for Updates reads the update feed and shows changelog notes.
 - Downloaded updates can be opened directly from the app.
+
+11. UI and Productivity
+- The app supports light/dark themes, accent color, custom chrome colors, and density modes.
+- Most dialogs and panels now share a rounded token-based UI style for a consistent experience.
 """
         dlg = QDialog(self)
         dlg.setWindowTitle("User Guide")
         dlg.resize(760, 560)
+        apply_dialog_theme_from_window(self, dlg)
         layout = QVBoxLayout(dlg)
         viewer = QTextEdit(dlg)
         viewer.setReadOnly(True)
@@ -6617,6 +6808,7 @@ Pypad User Guide 📘
         dlg = QDialog(self)
         dlg.setWindowTitle("Document Summary")
         dlg.resize(700, 460)
+        apply_dialog_theme_from_window(self, dlg)
         layout = QVBoxLayout(dlg)
         viewer = QTextEdit(dlg)
         viewer.setReadOnly(True)
@@ -6866,7 +7058,7 @@ class SettingsDialog(QDialog):
         lang_group = QGroupBox("Language \U0001F310", container)
         lang_layout = QFormLayout(lang_group)
         self.lang_combo = QComboBox(lang_group)
-        self.lang_combo.addItems(["English", "EspaÃ±ol", "Deutsch", "FranÃ§ais"])
+        self.lang_combo.addItems(["English", "EspaÃƒÂ±ol", "Deutsch", "FranÃƒÂ§ais"])
         current_lang = self._settings.get("language", "English")
         idx = self.lang_combo.findText(current_lang)
         if idx >= 0:
@@ -7232,3 +7424,4 @@ class SettingsDialog(QDialog):
             return
         self.reset_to_defaults_requested = True
         self.accept()
+

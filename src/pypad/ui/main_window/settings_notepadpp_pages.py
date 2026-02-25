@@ -28,6 +28,14 @@ from PySide6.QtWidgets import (
 )
 
 from ...app_settings.notepadpp_prefs import ENCODING_CHOICES, LANGUAGE_MENU_ITEMS
+from ..theme_tokens import build_color_swatch_style, build_tokens_from_settings
+
+
+def _tokens_for_dialog(dialog):
+    settings = getattr(dialog, "_settings", {})
+    if not isinstance(settings, dict):
+        settings = {}
+    return build_tokens_from_settings(settings)
 
 
 def _ensure_storage(dialog) -> None:
@@ -103,9 +111,14 @@ def _add_combo(dialog, form: QFormLayout, idx: int, key: str, label: str, option
 
 
 def _set_color_label(label: QLabel, value: str) -> None:
+    tokens = None
+    try:
+        tokens = _tokens_for_dialog(label.window())
+    except Exception:
+        tokens = None
     if value:
         label.setText(value)
-        label.setStyleSheet(f"background-color: {value}; border: 1px solid #888; padding: 2px;")
+        label.setStyleSheet(build_color_swatch_style(tokens, value))
     else:
         label.setText("(auto)")
         label.setStyleSheet("")
@@ -331,6 +344,19 @@ def _add_indent_overrides_table(dialog, root: QVBoxLayout, idx: int, key: str) -
 
 
 def _validate_indent_override_rows(table: QTableWidget) -> None:
+    try:
+        tokens = _tokens_for_dialog(table.window())
+    except Exception:
+        tokens = None
+    warning_border = "#d19a00"
+    warning_bg = "#fff8db"
+    error_border = "#d13438"
+    error_bg = "#ffe8ea"
+    if tokens is not None and bool(getattr(tokens, "dark_mode", False)):
+        warning_border = "#d7b04b"
+        warning_bg = "#3a3420"
+        error_border = "#d96a70"
+        error_bg = "#3c2428"
     seen: dict[str, list[int]] = {}
     raw_values: list[str] = []
     for row in range(table.rowCount()):
@@ -354,10 +380,10 @@ def _validate_indent_override_rows(table: QTableWidget) -> None:
         style = ""
         if is_empty:
             tooltip = "Language is required."
-            style = "QComboBox{border:1px solid #d19a00;background:#fff8db;} QLineEdit{background:#fff8db;}"
+            style = f"QComboBox{{border:1px solid {warning_border};background:{warning_bg};}} QLineEdit{{background:{warning_bg};}}"
         elif is_duplicate:
             tooltip = "Duplicate language row. Keep only one row per language."
-            style = "QComboBox{border:1px solid #d13438;background:#ffe8ea;} QLineEdit{background:#ffe8ea;}"
+            style = f"QComboBox{{border:1px solid {error_border};background:{error_bg};}} QLineEdit{{background:{error_bg};}}"
         combo.setToolTip(tooltip)
         combo.setStyleSheet(style)
         if line_edit is not None:
@@ -612,7 +638,10 @@ def build_npp_dark_mode_embedded_group(dialog, parent_layout: QVBoxLayout, idx: 
     group_layout = QVBoxLayout(group)
     note = QLabel("Advanced compatibility dark-mode preferences that extend PyPad Appearance.")
     note.setWordWrap(True)
-    note.setStyleSheet("color: #888;")
+    try:
+        note.setStyleSheet(f"color: {_tokens_for_dialog(dialog).text_muted};")
+    except Exception:
+        note.setStyleSheet("color: #888;")
     group_layout.addWidget(note)
     _build_dark_mode_controls(dialog, group_layout, idx)
     parent_layout.addWidget(group)

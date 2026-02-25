@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QTextEdit,
     QVBoxLayout,
 )
+from .theme_tokens import build_dialog_theme_qss_from_tokens, build_tokens_from_settings, build_workspace_dialog_qss
 
 
 class WorkspaceFilesDialog(QDialog):
@@ -40,6 +41,12 @@ class WorkspaceFilesDialog(QDialog):
 
         self.open_btn.clicked.connect(self._open_selected)
         self.close_btn.clicked.connect(self.reject)
+        self._apply_theme_from_parent()
+
+    def _apply_theme_from_parent(self) -> None:
+        settings = getattr(self.parent(), "settings", {}) if self.parent() is not None else {}
+        tokens = build_tokens_from_settings(settings if isinstance(settings, dict) else {})
+        self.setStyleSheet(build_dialog_theme_qss_from_tokens(tokens) + "\n" + build_workspace_dialog_qss(tokens))
 
     def _open_selected(self) -> None:
         item = self.list_widget.currentItem()
@@ -97,6 +104,12 @@ class WorkspaceSearchDialog(QDialog):
         self.list_widget.currentItemChanged.connect(self._update_preview)
         self.open_btn.clicked.connect(self._open_selected)
         self.close_btn.clicked.connect(self.reject)
+        self._apply_theme_from_parent()
+
+    def _apply_theme_from_parent(self) -> None:
+        settings = getattr(self.parent(), "settings", {}) if self.parent() is not None else {}
+        tokens = build_tokens_from_settings(settings if isinstance(settings, dict) else {})
+        self.setStyleSheet(build_dialog_theme_qss_from_tokens(tokens) + "\n" + build_workspace_dialog_qss(tokens))
 
     def _update_preview(self, current: QListWidgetItem | None, _prev: QListWidgetItem | None) -> None:
         if current is None:
