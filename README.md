@@ -46,3 +46,6 @@ Highlights:
 
 - `tests/visual_smoke_phase2_baseline.json` is the committed visual baseline used by CI.
 - `tests_tmp/visual_smoke_phase2/index.html` is generated during visual smoke runs for quick review.
+
+## Credits
+I use codex to turbo boost the codebase, however, i still use my coding skills for that.
