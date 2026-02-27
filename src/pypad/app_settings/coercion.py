@@ -4,6 +4,7 @@ from urllib.parse import urlsplit
 
 from .defaults import build_default_settings
 from .notepadpp_prefs import coerce_notepadpp_prefs
+from .scintilla_profile import ScintillaProfile
 
 def coerce_bool(value, default: bool = False) -> bool:
     if isinstance(value, bool):
@@ -63,6 +64,25 @@ def _coerce_logging_level(value: object, default: str = "INFO") -> str:
     return text if text in allowed else default
 
 
+def _coerce_float_clamped(value: object, default: float, min_value: float, max_value: float) -> float:
+    try:
+        num = float(value)  # type: ignore[arg-type]
+    except Exception:
+        num = default
+    return max(min_value, min(max_value, num))
+
+
+def _coerce_cmd_list(value: object, default: list[str]) -> list[str]:
+    if isinstance(value, str):
+        items = [part.strip() for part in value.split(",")]
+        cleaned = [item for item in items if item]
+        return cleaned or list(default)
+    if isinstance(value, (list, tuple)):
+        cleaned = [str(item).strip() for item in value if str(item).strip()]
+        return cleaned or list(default)
+    return list(default)
+
+
 def _sanitize_update_feed_url(value: object, default: str) -> str:
     raw = str(value or "").strip() or default
     if "neogl1tch20server" in raw or raw.endswith("/updates/notepad.xml"):
@@ -104,11 +124,39 @@ def migrate_settings(settings: dict) -> dict:
         )
         current["ai_app_knowledge_override"] = str(current.get("ai_app_knowledge_override", "") or "")
         current["ai_personality_advanced"] = str(current.get("ai_personality_advanced", "") or "")
+        current["lsp_definition_enabled"] = coerce_bool(current.get("lsp_definition_enabled", True), True)
+        current["lsp_definition_initialize_timeout_sec"] = _coerce_float_clamped(
+            current.get("lsp_definition_initialize_timeout_sec", 5.0),
+            5.0,
+            0.5,
+            30.0,
+        )
+        current["lsp_definition_request_timeout_sec"] = _coerce_float_clamped(
+            current.get("lsp_definition_request_timeout_sec", 3.0),
+            3.0,
+            0.5,
+            30.0,
+        )
+        current["lsp_definition_retries"] = _coerce_int_clamped(current.get("lsp_definition_retries", 2), 2, 0, 5)
+        current["lsp_definition_verbose_logging"] = coerce_bool(current.get("lsp_definition_verbose_logging", False), False)
+        current["lsp_python_servers"] = _coerce_cmd_list(
+            current.get("lsp_python_servers"),
+            list(defaults.get("lsp_python_servers", [])),
+        )
+        current["lsp_javascript_servers"] = _coerce_cmd_list(
+            current.get("lsp_javascript_servers"),
+            list(defaults.get("lsp_javascript_servers", [])),
+        )
+        current["lsp_typescript_servers"] = _coerce_cmd_list(
+            current.get("lsp_typescript_servers"),
+            list(defaults.get("lsp_typescript_servers", [])),
+        )
         current["save_debug_logs_to_appdata"] = coerce_bool(current.get("save_debug_logs_to_appdata", False), False)
         current["logging_level"] = _coerce_logging_level(current.get("logging_level", "INFO"))
         current["backup_output_dir"] = str(current.get("backup_output_dir", "") or "").strip()
         current["update_feed_url"] = _sanitize_update_feed_url(current.get("update_feed_url"), defaults.get("update_feed_url", ""))
         normalize_ui_visibility_settings(current)
+        ScintillaProfile.from_settings(current).apply_to_settings(current)
         return coerce_notepadpp_prefs(current)
 
     for key, value in defaults.items():
@@ -149,6 +197,26 @@ def migrate_settings(settings: dict) -> dict:
     current["workspace_max_scan_files"] = _coerce_int_clamped(
         current.get("workspace_max_scan_files", 25000), 25000, 1000, 200000
     )
+    raw_profiles = current.get("workspace_profiles", {})
+    cleaned_profiles: dict[str, dict[str, object]] = {}
+    if isinstance(raw_profiles, dict):
+        for key, value in raw_profiles.items():
+            name = str(key).strip()
+            if not name or not isinstance(value, dict):
+                continue
+            root = str(value.get("root", "") or "").strip()
+            if not root:
+                continue
+            cleaned_profiles[name] = {
+                "root": root,
+                "restore_session": coerce_bool(value.get("restore_session", True), True),
+            }
+    current["workspace_profiles"] = cleaned_profiles
+    current["workspace_startup_picker_enabled"] = coerce_bool(
+        current.get("workspace_startup_picker_enabled", False),
+        False,
+    )
+    current["workspace_startup_last_profile"] = str(current.get("workspace_startup_last_profile", "") or "").strip()
 
     current["search_default_match_case"] = coerce_bool(current.get("search_default_match_case", False), False)
     current["search_default_whole_word"] = coerce_bool(current.get("search_default_whole_word", False), False)
@@ -201,6 +269,33 @@ def migrate_settings(settings: dict) -> dict:
     current["ai_send_redact_tokens"] = coerce_bool(current.get("ai_send_redact_tokens", True), True)
     current["ai_app_knowledge_override"] = str(current.get("ai_app_knowledge_override", "") or "")
     current["ai_personality_advanced"] = str(current.get("ai_personality_advanced", "") or "")
+    current["lsp_definition_enabled"] = coerce_bool(current.get("lsp_definition_enabled", True), True)
+    current["lsp_definition_initialize_timeout_sec"] = _coerce_float_clamped(
+        current.get("lsp_definition_initialize_timeout_sec", 5.0),
+        5.0,
+        0.5,
+        30.0,
+    )
+    current["lsp_definition_request_timeout_sec"] = _coerce_float_clamped(
+        current.get("lsp_definition_request_timeout_sec", 3.0),
+        3.0,
+        0.5,
+        30.0,
+    )
+    current["lsp_definition_retries"] = _coerce_int_clamped(current.get("lsp_definition_retries", 2), 2, 0, 5)
+    current["lsp_definition_verbose_logging"] = coerce_bool(current.get("lsp_definition_verbose_logging", False), False)
+    current["lsp_python_servers"] = _coerce_cmd_list(
+        current.get("lsp_python_servers"),
+        list(defaults.get("lsp_python_servers", [])),
+    )
+    current["lsp_javascript_servers"] = _coerce_cmd_list(
+        current.get("lsp_javascript_servers"),
+        list(defaults.get("lsp_javascript_servers", [])),
+    )
+    current["lsp_typescript_servers"] = _coerce_cmd_list(
+        current.get("lsp_typescript_servers"),
+        list(defaults.get("lsp_typescript_servers", [])),
+    )
     current["ai_preview_redacted_prompt"] = coerce_bool(current.get("ai_preview_redacted_prompt", True), True)
     current["ai_key_storage_mode"] = _coerce_enum(current.get("ai_key_storage_mode"), {"settings", "env_only"}, "settings")
     current["update_feed_url"] = _sanitize_update_feed_url(current.get("update_feed_url"), defaults.get("update_feed_url", ""))
@@ -246,4 +341,5 @@ def migrate_settings(settings: dict) -> dict:
     current["settings_schema_version"] = 2
 
     normalize_ui_visibility_settings(current)
+    ScintillaProfile.from_settings(current).apply_to_settings(current)
     return coerce_notepadpp_prefs(current)

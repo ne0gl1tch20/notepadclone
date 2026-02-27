@@ -27,8 +27,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ...app_settings.notepadpp_prefs import ENCODING_CHOICES, LANGUAGE_MENU_ITEMS
-from ..theme_tokens import build_color_swatch_style, build_tokens_from_settings
+from pypad.app_settings.notepadpp_prefs import ENCODING_CHOICES, LANGUAGE_MENU_ITEMS
+from pypad.ui.theme.theme_tokens import build_color_swatch_style, build_tokens_from_settings
 
 
 def _tokens_for_dialog(dialog):
@@ -1056,3 +1056,4 @@ def collect_notepadpp_like_page_settings(dialog, settings: dict) -> dict:
     if bool(settings.get("npp_toolbar_hidden", False)):
         settings["show_main_toolbar"] = False
     return settings
+

@@ -8,7 +8,7 @@ from urllib.parse import quote_plus
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QTabWidget
 
-from ...app_settings.notepadpp_prefs import SEARCH_ENGINE_PRESETS
+from pypad.app_settings.notepadpp_prefs import SEARCH_ENGINE_PRESETS
 
 
 def _shorten_middle(text: str, max_len: int) -> str:
@@ -289,3 +289,4 @@ def apply_npp_print_preferences_to_page_layout(settings: dict, tab, page_cfg) ->
             value = 0
         if value > 0:
             setattr(page_cfg, attr, max(5, value))
+

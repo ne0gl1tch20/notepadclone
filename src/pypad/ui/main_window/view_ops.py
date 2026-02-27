@@ -63,21 +63,22 @@ from PySide6.QtWidgets import (
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtPrintSupport import QPrintDialog, QPrintPreviewDialog, QPrinter
 
-from ..debug_logs_dialog import DebugLogsDialog
-from ..detachable_tab_bar import DetachableTabBar
-from ..editor_tab import EditorTab
-from ..editor_widget import EditorWidget
-from ..ai_controller import AIController
-from ..asset_paths import resolve_asset_path
-from ..autosave import AutoSaveRecoveryDialog, AutoSaveStore
-from ..reminders import ReminderStore, RemindersDialog
-from ..security_controller import SecurityController
-from ..syntax_highlighter import CodeSyntaxHighlighter
-from ..updater_controller import UpdaterController
-from ..version_history import VersionHistoryDialog
-from ..workspace_controller import WorkspaceController
-from ..theme_tokens import build_dialog_theme_qss_from_tokens, build_tokens_from_settings, build_tool_dialog_qss
-from ..document_authoring import (
+from pypad.ui.debug.debug_logs_dialog import DebugLogsDialog
+from pypad.ui.editor.detachable_tab_bar import DetachableTabBar
+from pypad.ui.editor.editor_tab import EditorTab
+from pypad.app_settings.scintilla_profile import ScintillaProfile
+from pypad.ui.editor.editor_widget import EditorWidget
+from pypad.ui.ai.ai_controller import AIController
+from pypad.ui.theme.asset_paths import resolve_asset_path
+from pypad.ui.system.autosave import AutoSaveRecoveryDialog, AutoSaveStore
+from pypad.ui.system.reminders import ReminderStore, RemindersDialog
+from pypad.ui.security.security_controller import SecurityController
+from pypad.ui.editor.syntax_highlighter import CodeSyntaxHighlighter
+from pypad.ui.system.updater_controller import UpdaterController
+from pypad.ui.system.version_history import VersionHistoryDialog
+from pypad.ui.workspace.workspace_controller import WorkspaceController
+from pypad.ui.theme.theme_tokens import build_dialog_theme_qss_from_tokens, build_tokens_from_settings, build_tool_dialog_qss
+from pypad.ui.document.document_authoring import (
     PageLayoutConfig,
     PageLayoutDialog,
     apply_style_to_text,
@@ -85,7 +86,7 @@ from ..document_authoring import (
     build_ruler_text,
     extract_markdown_headings,
 )
-from ..document_review import (
+from pypad.ui.document.document_review import (
     accept_all_changes,
     accept_or_reject_change_at_cursor,
     add_comment,
@@ -286,10 +287,20 @@ class ViewOpsMixin:
     def _apply_scintilla_modes(self, tab: EditorTab) -> None:
         if not tab.text_edit.is_scintilla:
             return
+        profile = ScintillaProfile.from_settings(getattr(self, "settings", {}))
         tab.text_edit.set_column_mode(tab.column_mode)
         tab.text_edit.set_multi_caret(tab.multi_caret)
         tab.text_edit.set_code_folding(tab.code_folding)
-        tab.text_edit.set_auto_completion_mode(tab.auto_completion_mode)
+        tab.text_edit.set_auto_completion_mode(tab.auto_completion_mode, threshold=profile.auto_completion_threshold)
+        tab.text_edit.set_caret_width(profile.caret_width_px)
+        tab.text_edit.set_highlight_current_line(profile.highlight_current_line)
+        tab.text_edit.set_margin_padding(left=profile.margin_left_px, right=profile.margin_right_px)
+        tab.text_edit.set_line_number_width(
+            mode=profile.line_number_width_mode,
+            width_px=profile.line_number_width_px,
+        )
+        # Keep visibility as the final step so width/padding setup cannot re-show the gutter.
+        tab.text_edit.set_line_numbers_visible(bool(getattr(tab, "show_line_numbers", True)))
         if tab.auto_completion_mode == "open_docs":
             tab.text_edit.set_auto_completion_words(self._build_open_docs_word_list())
         self._apply_scintilla_visuals(tab)
@@ -323,7 +334,7 @@ class ViewOpsMixin:
             action.setChecked(checked)
             action.blockSignals(False)
 
-    def _require_scintilla_feature(self) -> bool:
+    def _require_scintilla_feature(self, feature_name: str = "This feature") -> bool:
         tab = self.active_tab()
         if tab is None:
             return False
@@ -332,7 +343,10 @@ class ViewOpsMixin:
         QMessageBox.information(
             self,
             "Feature Unavailable",
-            "This feature requires QScintilla (PySide6.Qsci).",
+            (
+                f"{feature_name} requires QScintilla (PySide6.Qsci).\n\n"
+                "Fallback editor mode is active, so advanced multi-caret/column and symbol rendering features are limited."
+            ),
         )
         return False
 
@@ -692,7 +706,11 @@ class ViewOpsMixin:
             tab.markdown_preview.show()
 
     def toggle_column_mode(self, checked: bool) -> None:
-        if not self._require_scintilla_feature():
+        if not self._require_scintilla_feature("Column mode"):
+            if hasattr(self, "column_mode_action"):
+                self.column_mode_action.blockSignals(True)
+                self.column_mode_action.setChecked(False)
+                self.column_mode_action.blockSignals(False)
             return
         tab = self.active_tab()
         if tab is None:
@@ -702,7 +720,11 @@ class ViewOpsMixin:
         self.show_status_message("Column mode enabled." if checked else "Column mode disabled.", 1800)
 
     def toggle_multi_caret(self, checked: bool) -> None:
-        if not self._require_scintilla_feature():
+        if not self._require_scintilla_feature("Multi-caret"):
+            if hasattr(self, "multi_caret_action"):
+                self.multi_caret_action.blockSignals(True)
+                self.multi_caret_action.setChecked(False)
+                self.multi_caret_action.blockSignals(False)
             return
         tab = self.active_tab()
         if tab is None:
@@ -769,6 +791,18 @@ class ViewOpsMixin:
             tab = self.tab_widget.widget(index)
             if isinstance(tab, EditorTab):
                 tab.text_edit.set_wrap_enabled(checked)
+
+    def toggle_show_line_numbers(self, checked: bool) -> None:
+        self.line_numbers_enabled = bool(checked)
+        self.settings["npp_margin_line_numbers_enabled"] = bool(checked)
+        for index in range(self.tab_widget.count()):
+            tab = self.tab_widget.widget(index)
+            if isinstance(tab, EditorTab):
+                tab.show_line_numbers = bool(checked)
+                tab.text_edit.set_line_numbers_visible(bool(checked))
+        if hasattr(self, "save_settings_to_disk"):
+            self.save_settings_to_disk()
+        self.show_status_message("Line numbers shown." if checked else "Line numbers hidden.", 1800)
 
     def open_define_language_dialog(self) -> None:
         dlg = QDialog(self)
@@ -1603,4 +1637,5 @@ class ViewOpsMixin:
         if hasattr(self, "advanced_features"):
             self.advanced_features.refresh_views()
         self.update_action_states()
+
 

@@ -1,11 +1,12 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
+import html
 import re
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QPaintEvent, QShowEvent, QPalette
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -29,6 +30,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QSplitter,
     QStackedWidget,
+    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -37,14 +39,17 @@ from PySide6.QtWidgets import (
 )
 
 from ...app_settings import migrate_settings
-from ...app_settings.defaults import DEFAULT_UPDATE_FEED_URL
-from ...i18n.translator import get_language_display_options
-from ..dialog_theme import (
+from pypad.app_settings.scintilla_profile import ScintillaProfile
+from pypad.app_settings.defaults import DEFAULT_UPDATE_FEED_URL
+from pypad.ui.editor.syntax_highlighter import THEME_PRESETS as SYNTAX_THEME_PRESETS
+from pypad.i18n.translator import get_language_display_options
+from pypad.logging_utils import get_logger
+from pypad.ui.theme.dialog_theme import (
     themed_file_dialog_get_existing_directory,
     themed_file_dialog_get_open_file_name,
     themed_file_dialog_get_save_file_name,
 )
-from ..theme_tokens import (
+from pypad.ui.theme.theme_tokens import (
     build_dialog_theme_qss_from_tokens,
     build_settings_dialog_qss,
     build_tokens_from_settings,
@@ -60,6 +65,8 @@ from .settings_notepadpp_pages import (
 
 if TYPE_CHECKING:
     from .window import Notepad
+
+_LOGGER = get_logger(__name__)
 
 
 class SettingsDialog(QDialog):
@@ -80,6 +87,8 @@ class SettingsDialog(QDialog):
         self._settings_form_label_width = 190
         self._npp_pref_controls: dict[str, dict] = {}
         self.reset_to_defaults_requested = False
+        self._theme_probe_logged_open = False
+        self._theme_probe_logged_first_paint = False
 
         root = QVBoxLayout(self)
         self.settings_search_input = QLineEdit(self)
@@ -136,7 +145,7 @@ class SettingsDialog(QDialog):
         self._apply_non_stretch_settings_layout()
 
         buttons_row = QHBoxLayout()
-        self.restore_defaults_btn = QPushButton("Restore Defaults ♻️", self)
+        self.restore_defaults_btn = QPushButton("Restore Defaults", self)
         self.restore_defaults_btn.clicked.connect(self._reset_controls_to_defaults)
         buttons_row.addWidget(self.restore_defaults_btn)
         buttons_row.addStretch(1)
@@ -160,6 +169,10 @@ class SettingsDialog(QDialog):
         self._load_controls_from_settings(self._settings)
         self._apply_dialog_theme()
         self.dark_checkbox.toggled.connect(lambda _checked: self._apply_dialog_theme())
+        npp_dark_combo = self._npp_dark_mode_preference_combo()
+        if npp_dark_combo is not None:
+            npp_dark_combo.currentTextChanged.connect(lambda _text: self._sync_dark_checkbox_from_npp_preference())
+            self._sync_dark_checkbox_from_npp_preference()
         if self._initial_section:
             QTimer.singleShot(0, lambda: self.focus_section(self._initial_section))
 
@@ -183,16 +196,25 @@ class SettingsDialog(QDialog):
 
     def _add_category(self, name: str, page: QWidget) -> int:
         page.setMaximumWidth(int(getattr(self, "_settings_page_content_max_width", 720)))
+        page.setObjectName("settingsPageBody")
+        page.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        page.setAutoFillBackground(True)
         page_policy = page.sizePolicy()
         page_policy.setHorizontalPolicy(QSizePolicy.Policy.Preferred)
         page.setSizePolicy(page_policy)
 
         center_host = QWidget(self.settings_pages)
+        center_host.setObjectName("settingsPageHost")
+        center_host.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        center_host.setAutoFillBackground(True)
         center_layout = QVBoxLayout(center_host)
         center_layout.setContentsMargins(0, 0, 0, 0)
         center_layout.setSpacing(0)
 
         scroll = QScrollArea(center_host)
+        scroll.setObjectName("settingsPageScroll")
+        scroll.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        scroll.setAutoFillBackground(True)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -200,19 +222,24 @@ class SettingsDialog(QDialog):
         center_layout.addWidget(scroll, 1)
 
         scroll_content = QWidget(scroll)
+        scroll_content.setObjectName("settingsPageScrollContent")
+        scroll_content.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        scroll_content.setAutoFillBackground(True)
         scroll_layout = QVBoxLayout(scroll_content)
         scroll_layout.setContentsMargins(16, 12, 16, 12)
         scroll_layout.setSpacing(0)
         scroll_layout.addWidget(page, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         scroll_layout.addStretch(1)
         scroll.setWidget(scroll_content)
+        scroll.viewport().setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        scroll.viewport().setAutoFillBackground(True)
 
         idx = self.settings_pages.addWidget(center_host)
         item = QListWidgetItem(name)
         item.setToolTip(self._page_description_for_name(name))
         self.settings_nav_list.addItem(item)
         self._nav_base_labels.append(name)
-        self._nav_scopes.append("npp" if str(name).startswith("N++ •") else "pypad")
+        self._nav_scopes.append("npp" if str(name).startswith("N++ ") else "pypad")
         item.setText(self._format_nav_item_text(idx))
         self._route_index_map.setdefault(self._normalize_route_key(name), idx)
         return idx
@@ -220,8 +247,8 @@ class SettingsDialog(QDialog):
     @staticmethod
     def _clean_nav_title(name: str) -> str:
         text = str(name or "").strip()
-        if text.startswith("N++ • "):
-            return text.replace("N++ • ", "", 1)
+        if text.startswith("N++ "):
+            return text.replace("N++ ", "", 1)
         return text
 
     def _format_nav_item_text(self, idx: int, count: int = 0, *, query_active: bool = False) -> str:
@@ -239,10 +266,11 @@ class SettingsDialog(QDialog):
 
     def _page_description_for_name(self, name: str) -> str:
         text = str(name or "")
-        key = self._normalize_route_key(text.replace("N++ •", ""))
+        key = self._normalize_route_key(text.replace("N++", ""))
         descriptions = {
             "appearance": "Theme, colors, fonts, and visual density for the app.",
             "editor": "Core editing behavior, syntax defaults, and caret options.",
+            "scintilla": "Advanced Scintilla behavior for wrapping, indentation, margins, caret, and symbols.",
             "language": "App language and translation cache controls.",
             "tabs": "Tab size, close buttons, elide mode, and double-click actions.",
             "layout": "Dock layout persistence, autosave, and panel shortcuts.",
@@ -397,7 +425,14 @@ class SettingsDialog(QDialog):
             except Exception:
                 pass
 
-    def _build_color_row(self, parent: QWidget, category_idx: int, label: str) -> tuple[QLabel, QWidget]:
+    def _build_color_row(
+        self,
+        parent: QWidget,
+        category_idx: int,
+        label: str,
+        *,
+        on_change=None,
+    ) -> tuple[QLabel, QWidget]:
         holder = QWidget(parent)
         row = QHBoxLayout(holder)
         row.setContentsMargins(0, 0, 0, 0)
@@ -419,6 +454,8 @@ class SettingsDialog(QDialog):
                 preview.setStyleSheet("")
             if label == "Accent color":
                 self._apply_dialog_theme()
+            if callable(on_change):
+                on_change()
 
         def pick_color() -> None:
             current = preview.text() if preview.text() != "(auto)" else "#ffffff"
@@ -436,7 +473,7 @@ class SettingsDialog(QDialog):
         appearance_layout = QVBoxLayout(appearance)
         appearance_form = QFormLayout()
         appearance_layout.addLayout(appearance_form)
-        idx = self._add_category("🎨 Appearance", appearance)
+        idx = self._add_category("Appearance", appearance)
         self._register_route_aliases(idx, "appearance", "theme", "look", "npp-dark-mode")
 
         self.dark_checkbox = self._add_check(appearance_form, idx, "Enable dark mode")
@@ -481,7 +518,7 @@ class SettingsDialog(QDialog):
         # Editor
         editor = QWidget(self)
         editor_layout = QFormLayout(editor)
-        idx = self._add_category("✍️ Editor", editor)
+        idx = self._add_category("Editor", editor)
         self._register_route_aliases(idx, "editor")
         self.syntax_highlight_checkbox = self._add_check(editor_layout, idx, "Enable code syntax highlighting")
         self.syntax_mode_combo = self._add_combo(editor_layout, idx, "Syntax mode", ["Auto", "Python", "JavaScript", "JSON", "Markdown", "Plain"])
@@ -492,6 +529,154 @@ class SettingsDialog(QDialog):
         self.trim_trailing_checkbox = self._add_check(editor_layout, idx, "Trim trailing whitespace on save")
         self.caret_width_spin = self._add_spin(editor_layout, idx, "Caret width", 1, 4)
         self.highlight_current_line_checkbox = self._add_check(editor_layout, idx, "Highlight current line")
+
+        # Scintilla
+        scintilla = QWidget(self)
+        scintilla_layout = QVBoxLayout(scintilla)
+        idx = self._add_category("Scintilla", scintilla)
+        self._register_route_aliases(idx, "scintilla", "editor-engine", "compat-editor")
+        self.scintilla_tabs = QTabWidget(scintilla)
+        scintilla_layout.addWidget(self.scintilla_tabs)
+
+        display_tab = QWidget(self.scintilla_tabs)
+        display_form = QFormLayout(display_tab)
+        self.scintilla_wrap_mode_combo = self._add_combo(display_form, idx, "Wrap mode", ["word", "none"])
+        self.scintilla_line_numbers_checkbox = self._add_check(display_form, idx, "Show line numbers")
+        self.scintilla_line_number_width_mode_combo = self._add_combo(display_form, idx, "Line number width mode", ["dynamic", "constant"])
+        self.scintilla_line_number_width_spin = self._add_spin(display_form, idx, "Line number width (px)", 24, 160)
+        self.scintilla_line_number_width_mode_combo.currentTextChanged.connect(
+            lambda text: self.scintilla_line_number_width_spin.setEnabled(str(text).strip().lower() == "constant")
+        )
+        self.scintilla_tabs.addTab(display_tab, "Display")
+
+        editing_tab = QWidget(self.scintilla_tabs)
+        editing_form = QFormLayout(editing_tab)
+        self.scintilla_auto_completion_mode_combo = self._add_combo(
+            editing_form,
+            idx,
+            "Auto completion source",
+            ["all", "document", "apis", "open_docs", "none"],
+        )
+        self.scintilla_auto_completion_threshold_spin = self._add_spin(editing_form, idx, "Auto completion threshold", 1, 12)
+        self.scintilla_column_mode_checkbox = self._add_check(editing_form, idx, "Enable column mode by default")
+        self.scintilla_multi_caret_checkbox = self._add_check(editing_form, idx, "Enable multi-caret by default")
+        self.scintilla_code_folding_checkbox = self._add_check(editing_form, idx, "Enable code folding by default")
+        self.scintilla_tabs.addTab(editing_tab, "Editing")
+
+        indentation_tab = QWidget(self.scintilla_tabs)
+        indentation_form = QFormLayout(indentation_tab)
+        self.scintilla_tab_width_spin = self._add_spin(indentation_form, idx, "Tab width", 1, 16)
+        self.scintilla_use_tabs_checkbox = self._add_check(indentation_form, idx, "Use tabs for indentation")
+        self.scintilla_auto_indent_checkbox = self._add_check(indentation_form, idx, "Enable auto indent")
+        self.scintilla_trim_trailing_checkbox = self._add_check(
+            indentation_form,
+            idx,
+            "Trim trailing whitespace on save",
+        )
+        self.scintilla_tabs.addTab(indentation_tab, "Indentation")
+
+        wrapping_tab = QWidget(self.scintilla_tabs)
+        wrapping_form = QFormLayout(wrapping_tab)
+        self.scintilla_show_wrap_symbol_checkbox = self._add_check(wrapping_form, idx, "Show wrap symbol")
+        self.scintilla_tabs.addTab(wrapping_tab, "Wrapping")
+
+        guides_tab = QWidget(self.scintilla_tabs)
+        guides_form = QFormLayout(guides_tab)
+        self.scintilla_show_indent_guides_checkbox = self._add_check(guides_form, idx, "Show indent guides")
+        self.scintilla_tabs.addTab(guides_tab, "Guides")
+
+        caret_tab = QWidget(self.scintilla_tabs)
+        caret_form = QFormLayout(caret_tab)
+        self.scintilla_caret_width_spin = self._add_spin(caret_form, idx, "Caret width", 1, 6)
+        self.scintilla_highlight_current_line_checkbox = self._add_check(caret_form, idx, "Highlight current line")
+        self.scintilla_tabs.addTab(caret_tab, "Caret")
+
+        whitespace_tab = QWidget(self.scintilla_tabs)
+        whitespace_form = QFormLayout(whitespace_tab)
+        self.scintilla_show_space_tab_checkbox = self._add_check(whitespace_form, idx, "Show space/tab")
+        self.scintilla_show_eol_checkbox = self._add_check(whitespace_form, idx, "Show EOL")
+        self.scintilla_show_non_printing_checkbox = self._add_check(whitespace_form, idx, "Show non-printing")
+        self.scintilla_show_control_chars_checkbox = self._add_check(whitespace_form, idx, "Show control chars")
+        self.scintilla_show_all_chars_checkbox = self._add_check(whitespace_form, idx, "Show all chars")
+        self.scintilla_tabs.addTab(whitespace_tab, "Whitespace")
+
+        styles_tab = QWidget(self.scintilla_tabs)
+        styles_form = QFormLayout(styles_tab)
+        self.scintilla_style_theme_combo = self._add_combo(styles_form, idx, "Style theme", ["default", "high_contrast", "solarized_light"])
+        self.scintilla_style_language_combo = self._add_combo(
+            styles_form,
+            idx,
+            "Language",
+            ["python", "javascript", "json", "markdown", "plain"],
+        )
+        self.scintilla_style_keyword_label, self.scintilla_style_keyword_row = self._build_color_row(
+            styles_tab,
+            idx,
+            "Keyword color",
+            on_change=lambda: self._refresh_scintilla_style_preview(),
+        )
+        self.scintilla_style_string_label, self.scintilla_style_string_row = self._build_color_row(
+            styles_tab,
+            idx,
+            "String color",
+            on_change=lambda: self._refresh_scintilla_style_preview(),
+        )
+        self.scintilla_style_comment_label, self.scintilla_style_comment_row = self._build_color_row(
+            styles_tab,
+            idx,
+            "Comment color",
+            on_change=lambda: self._refresh_scintilla_style_preview(),
+        )
+        self.scintilla_style_number_label, self.scintilla_style_number_row = self._build_color_row(
+            styles_tab,
+            idx,
+            "Number color",
+            on_change=lambda: self._refresh_scintilla_style_preview(),
+        )
+        styles_form.addRow("Keyword", self.scintilla_style_keyword_row)
+        styles_form.addRow("String", self.scintilla_style_string_row)
+        styles_form.addRow("Comment", self.scintilla_style_comment_row)
+        styles_form.addRow("Number", self.scintilla_style_number_row)
+        self.scintilla_style_preview = QTextEdit(styles_tab)
+        self.scintilla_style_preview.setReadOnly(True)
+        self.scintilla_style_preview.setMinimumHeight(180)
+        styles_form.addRow("Preview", self.scintilla_style_preview)
+        style_btns = QHBoxLayout()
+        self.scintilla_style_reset_language_btn = QPushButton("Reset Language Overrides", styles_tab)
+        self.scintilla_style_clear_all_btn = QPushButton("Clear All Overrides", styles_tab)
+        style_btns.addWidget(self.scintilla_style_reset_language_btn)
+        style_btns.addWidget(self.scintilla_style_clear_all_btn)
+        styles_form.addRow("Overrides", QWidget(styles_tab))
+        styles_form.itemAt(styles_form.rowCount() - 1, QFormLayout.ItemRole.FieldRole).widget().setLayout(style_btns)
+        self.scintilla_tabs.addTab(styles_tab, "Styles")
+
+        margins_tab = QWidget(self.scintilla_tabs)
+        margins_form = QFormLayout(margins_tab)
+        self.scintilla_margin_left_spin = self._add_spin(margins_form, idx, "Margin left (px)", 0, 64)
+        self.scintilla_margin_right_spin = self._add_spin(margins_form, idx, "Margin right (px)", 0, 64)
+        profile_row = QHBoxLayout()
+        self.scintilla_export_profile_btn = QPushButton("Export Scintilla Profile...", margins_tab)
+        self.scintilla_import_profile_btn = QPushButton("Import Scintilla Profile...", margins_tab)
+        self.scintilla_reset_profile_btn = QPushButton("Reset Scintilla Defaults", margins_tab)
+        profile_row.addWidget(self.scintilla_export_profile_btn)
+        profile_row.addWidget(self.scintilla_import_profile_btn)
+        profile_row.addWidget(self.scintilla_reset_profile_btn)
+        margins_form.addRow("Profile", QWidget(margins_tab))
+        margins_form.itemAt(margins_form.rowCount() - 1, QFormLayout.ItemRole.FieldRole).widget().setLayout(profile_row)
+        self._register_search(idx, "Export Scintilla Profile", self.scintilla_export_profile_btn)
+        self._register_search(idx, "Import Scintilla Profile", self.scintilla_import_profile_btn)
+        self._register_search(idx, "Reset Scintilla Defaults", self.scintilla_reset_profile_btn)
+        self.scintilla_tabs.addTab(margins_tab, "Margins")
+        scintilla_layout.addStretch(1)
+        self.scintilla_export_profile_btn.clicked.connect(self._export_scintilla_profile)
+        self.scintilla_import_profile_btn.clicked.connect(self._import_scintilla_profile)
+        self.scintilla_reset_profile_btn.clicked.connect(self._reset_scintilla_profile_defaults)
+        self._scintilla_style_overrides_working: dict[str, dict[str, str]] = {}
+        self._scintilla_style_current_language: str = "python"
+        self.scintilla_style_theme_combo.currentTextChanged.connect(lambda _text: self._refresh_scintilla_style_preview())
+        self.scintilla_style_language_combo.currentTextChanged.connect(self._on_scintilla_style_language_changed)
+        self.scintilla_style_reset_language_btn.clicked.connect(self._reset_scintilla_style_language_overrides)
+        self.scintilla_style_clear_all_btn.clicked.connect(self._clear_scintilla_style_overrides)
 
         # Language
         language = QWidget(self)
@@ -507,7 +692,7 @@ class SettingsDialog(QDialog):
         # Tabs
         tabs = QWidget(self)
         tabs_layout = QFormLayout(tabs)
-        idx = self._add_category("🗂️ Tabs", tabs)
+        idx = self._add_category("Tabs", tabs)
         self._register_route_aliases(idx, "tabs")
         self.tab_close_mode_combo = self._add_combo(tabs_layout, idx, "Close button mode", ["always", "hover"])
         self.tab_elide_combo = self._add_combo(tabs_layout, idx, "Tab elide mode", ["right", "middle", "none"])
@@ -518,7 +703,7 @@ class SettingsDialog(QDialog):
         # Layout
         layout_page = QWidget(self)
         layout_form = QFormLayout(layout_page)
-        idx = self._add_category("🧩 Layout", layout_page)
+        idx = self._add_category("Layout", layout_page)
         self._register_route_aliases(idx, "layout", "window-layout")
         self.layout_auto_save_checkbox = self._add_check(layout_form, idx, "Auto-save layout on dock/toolbar move")
         self.snap_dock_shortcuts_checkbox = self._add_check(layout_form, idx, "Enable snap dock shortcuts")
@@ -531,7 +716,7 @@ class SettingsDialog(QDialog):
         # Workspace
         workspace = QWidget(self)
         workspace_layout = QFormLayout(workspace)
-        idx = self._add_category("📁 Workspace", workspace)
+        idx = self._add_category("Workspace", workspace)
         self._register_route_aliases(idx, "workspace")
         self.workspace_root_edit = QLineEdit(workspace)
         workspace_layout.addRow("Workspace root", self.workspace_root_edit)
@@ -543,7 +728,7 @@ class SettingsDialog(QDialog):
         # Search
         search = QWidget(self)
         search_layout = QFormLayout(search)
-        idx = self._add_category("🔎 Search", search)
+        idx = self._add_category("Search", search)
         self._register_route_aliases(idx, "search", "find")
         self.search_default_match_case_checkbox = self._add_check(search_layout, idx, "Default match case")
         self.search_default_whole_word_checkbox = self._add_check(search_layout, idx, "Default whole word")
@@ -555,7 +740,7 @@ class SettingsDialog(QDialog):
         # Shortcuts
         shortcuts = QWidget(self)
         shortcuts_layout = QVBoxLayout(shortcuts)
-        idx = self._add_category("⌨️ Shortcuts", shortcuts)
+        idx = self._add_category("Shortcuts", shortcuts)
         self._register_route_aliases(idx, "shortcuts", "keys", "hotkeys")
         shortcuts_form = QFormLayout()
         shortcuts_layout.addLayout(shortcuts_form)
@@ -578,7 +763,7 @@ class SettingsDialog(QDialog):
         # AI & Updates
         ai = QWidget(self)
         ai_layout = QFormLayout(ai)
-        idx = self._add_category("🤖 AI & Updates", ai)
+        idx = self._add_category("AI & Updates", ai)
         self._register_route_aliases(idx, "ai", "ai-updates", "updates", "ai-and-updates")
         self.gemini_api_key_edit = QLineEdit(ai)
         self.gemini_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
@@ -649,11 +834,49 @@ class SettingsDialog(QDialog):
         self.ai_cost_rate_spin.setSingleStep(0.0001)
         ai_layout.addRow("Estimated USD per 1k tokens", self.ai_cost_rate_spin)
         self._register_search(idx, "Estimated USD per 1k tokens", self.ai_cost_rate_spin)
+        self.lsp_definition_enabled_checkbox = self._add_check(ai_layout, idx, "Enable LSP go-to-definition")
+        self.lsp_init_timeout_spin = QDoubleSpinBox(ai)
+        self.lsp_init_timeout_spin.setDecimals(1)
+        self.lsp_init_timeout_spin.setRange(0.5, 30.0)
+        self.lsp_init_timeout_spin.setSingleStep(0.5)
+        ai_layout.addRow("LSP init timeout (sec)", self.lsp_init_timeout_spin)
+        self._register_search(idx, "LSP init timeout", self.lsp_init_timeout_spin)
+        self.lsp_request_timeout_spin = QDoubleSpinBox(ai)
+        self.lsp_request_timeout_spin.setDecimals(1)
+        self.lsp_request_timeout_spin.setRange(0.5, 30.0)
+        self.lsp_request_timeout_spin.setSingleStep(0.5)
+        ai_layout.addRow("LSP request timeout (sec)", self.lsp_request_timeout_spin)
+        self._register_search(idx, "LSP request timeout", self.lsp_request_timeout_spin)
+        self.lsp_retries_spin = self._add_spin(ai_layout, idx, "LSP retries per server", 0, 5)
+        self.lsp_verbose_logging_checkbox = self._add_check(ai_layout, idx, "Enable LSP verbose logging")
+        self.lsp_python_servers_edit = QLineEdit(ai)
+        self.lsp_python_servers_edit.setPlaceholderText("pylsp, pyright-langserver --stdio")
+        ai_layout.addRow("Python LSP server preference", self.lsp_python_servers_edit)
+        self._register_search(idx, "Python LSP server preference", self.lsp_python_servers_edit)
+        self.lsp_javascript_servers_edit = QLineEdit(ai)
+        self.lsp_javascript_servers_edit.setPlaceholderText("typescript-language-server --stdio, vtsls --stdio")
+        ai_layout.addRow("JavaScript LSP server preference", self.lsp_javascript_servers_edit)
+        self._register_search(idx, "JavaScript LSP server preference", self.lsp_javascript_servers_edit)
+        self.lsp_typescript_servers_edit = QLineEdit(ai)
+        self.lsp_typescript_servers_edit.setPlaceholderText("typescript-language-server --stdio, vtsls --stdio")
+        ai_layout.addRow("TypeScript LSP server preference", self.lsp_typescript_servers_edit)
+        self._register_search(idx, "TypeScript LSP server preference", self.lsp_typescript_servers_edit)
+        self.lsp_definition_enabled_checkbox.toggled.connect(
+            lambda checked: (
+                self.lsp_init_timeout_spin.setEnabled(bool(checked)),
+                self.lsp_request_timeout_spin.setEnabled(bool(checked)),
+                self.lsp_retries_spin.setEnabled(bool(checked)),
+                self.lsp_verbose_logging_checkbox.setEnabled(bool(checked)),
+                self.lsp_python_servers_edit.setEnabled(bool(checked)),
+                self.lsp_javascript_servers_edit.setEnabled(bool(checked)),
+                self.lsp_typescript_servers_edit.setEnabled(bool(checked)),
+            )
+        )
 
         # Privacy
         privacy = QWidget(self)
         privacy_layout = QFormLayout(privacy)
-        idx = self._add_category("🔐 Privacy & Security", privacy)
+        idx = self._add_category("Privacy & Security", privacy)
         self._register_route_aliases(idx, "privacy", "security", "privacy-security")
         self.privacy_lock_checkbox = self._add_check(privacy_layout, idx, "Enable lock screen on open")
         self.lock_password_edit = QLineEdit(privacy)
@@ -672,7 +895,7 @@ class SettingsDialog(QDialog):
         # Backup
         backup = QWidget(self)
         backup_layout = QVBoxLayout(backup)
-        idx = self._add_category("💾 Backup & Restore", backup)
+        idx = self._add_category("Backup & Restore", backup)
         self._register_route_aliases(idx, "backup", "restore", "backup-restore")
         backup_buttons = QHBoxLayout()
         self.backup_btn = QPushButton("Backup Settings...", backup)
@@ -682,7 +905,8 @@ class SettingsDialog(QDialog):
         backup_layout.addLayout(backup_buttons)
         self.export_settings_profile_btn = QPushButton("Export Profile...", backup)
         self.import_settings_profile_btn = QPushButton("Import Profile...", backup)
-        self.edit_settings_json_btn = QPushButton("Edit with settings.json 📝", backup)
+        self.edit_settings_json_btn = QPushButton("Edit with settings.json", backup)
+        self.factory_reset_btn = QPushButton("Factory Reset (Close App)", backup)
         backup_output_row = QWidget(backup)
         backup_output_layout = QHBoxLayout(backup_output_row)
         backup_output_layout.setContentsMargins(0, 0, 0, 0)
@@ -695,8 +919,10 @@ class SettingsDialog(QDialog):
         backup_layout.addWidget(self.export_settings_profile_btn)
         backup_layout.addWidget(self.import_settings_profile_btn)
         backup_layout.addWidget(self.edit_settings_json_btn)
+        backup_layout.addWidget(self.factory_reset_btn)
         self._register_search(idx, "Backup Settings", self.backup_btn)
         self._register_search(idx, "Restore Settings", self.restore_btn)
+        self._register_search(idx, "Factory Reset", self.factory_reset_btn)
         self._register_search(idx, "Backup output folder", self.backup_output_dir_edit)
         backup_layout.addStretch(1)
         self.backup_btn.clicked.connect(self.backup_settings)
@@ -705,11 +931,12 @@ class SettingsDialog(QDialog):
         self.import_settings_profile_btn.clicked.connect(self._import_profile)
         self.edit_settings_json_btn.clicked.connect(self._edit_with_settings_json)
         self.backup_output_dir_browse_btn.clicked.connect(self._pick_backup_output_dir)
+        self.factory_reset_btn.clicked.connect(self._request_factory_reset)
 
         # Advanced
         advanced = QWidget(self)
         advanced_layout = QFormLayout(advanced)
-        idx = self._add_category("🧪 Advanced", advanced)
+        idx = self._add_category("Advanced", advanced)
         self._register_route_aliases(idx, "advanced")
         self.experimental_checkbox = self._add_check(advanced_layout, idx, "Enable experimental features")
         self.debug_telemetry_checkbox = self._add_check(advanced_layout, idx, "Enable debug telemetry")
@@ -805,10 +1032,340 @@ class SettingsDialog(QDialog):
         self.setStyleSheet(
             build_dialog_theme_qss_from_tokens(tokens) + "\n" + build_settings_dialog_qss(tokens)
         )
+        self._apply_settings_stack_direct_style(tokens.surface_bg, tokens.text, tokens.text_muted)
+        self._apply_settings_stack_palette(tokens.surface_bg, tokens.text)
+
+    def _apply_settings_stack_direct_style(self, surface_bg: str, text: str, text_muted: str) -> None:
+        if not hasattr(self, "settings_pages"):
+            return
+        host_style = (
+            f"background: {surface_bg}; background-color: {surface_bg}; color: {text};"
+            f"selection-background-color: {surface_bg};"
+        )
+        body_style = (
+            f"background: {surface_bg}; background-color: {surface_bg}; color: {text};"
+            f"QLabel, QCheckBox, QRadioButton, QGroupBox {{ color: {text}; }}"
+            f"QLabel:disabled, QCheckBox:disabled, QRadioButton:disabled, QGroupBox:disabled {{ color: {text_muted}; }}"
+            f"QGroupBox::title {{ color: {text}; }}"
+        )
+        scroll_style = f"background: {surface_bg}; background-color: {surface_bg}; border: none;"
+
+        for w in self.settings_pages.findChildren(QWidget, "settingsPageHost"):
+            w.setStyleSheet(host_style)
+        for w in self.settings_pages.findChildren(QWidget, "settingsPageScrollContent"):
+            w.setStyleSheet(host_style)
+        for w in self.settings_pages.findChildren(QWidget, "settingsPageBody"):
+            w.setStyleSheet(body_style)
+        for scroll in self.settings_pages.findChildren(QScrollArea, "settingsPageScroll"):
+            scroll.setStyleSheet(scroll_style)
+            scroll.viewport().setStyleSheet(scroll_style)
+
+    def _apply_settings_stack_palette(self, surface_bg: str, text: str) -> None:
+        bg = QColor(surface_bg)
+        fg = QColor(text)
+        if not bg.isValid() or not fg.isValid():
+            return
+
+        def _apply_palette(widget: QWidget | None) -> None:
+            if not isinstance(widget, QWidget):
+                return
+            pal = widget.palette()
+            pal.setColor(QPalette.ColorRole.Window, bg)
+            pal.setColor(QPalette.ColorRole.Base, bg)
+            pal.setColor(QPalette.ColorRole.Text, fg)
+            pal.setColor(QPalette.ColorRole.WindowText, fg)
+            widget.setPalette(pal)
+
+        if hasattr(self, "settings_pages"):
+            _apply_palette(self.settings_pages)
+            for obj_name in ("settingsPageHost", "settingsPageScrollContent", "settingsPageBody"):
+                for w in self.settings_pages.findChildren(QWidget, obj_name):
+                    _apply_palette(w)
+            for scroll in self.settings_pages.findChildren(QScrollArea, "settingsPageScroll"):
+                _apply_palette(scroll)
+                _apply_palette(scroll.viewport())
+
+    def _theme_probe_preview_settings(self) -> dict:
+        preview_settings = dict(self._settings)
+        if hasattr(self, "dark_checkbox"):
+            preview_settings["dark_mode"] = bool(self.dark_checkbox.isChecked())
+        if hasattr(self, "accent_color_label"):
+            preview_settings["accent_color"] = self._normalize_hex(self._label_color_value(self.accent_color_label), "#4a90e2")
+        if hasattr(self, "theme_combo"):
+            preview_settings["theme"] = str(self.theme_combo.currentText() or preview_settings.get("theme", "Default"))
+        if hasattr(self, "use_custom_colors_checkbox"):
+            preview_settings["use_custom_colors"] = bool(self.use_custom_colors_checkbox.isChecked())
+        for key, label_attr in (
+            ("custom_editor_bg", "custom_editor_bg_label"),
+            ("custom_editor_fg", "custom_editor_fg_label"),
+            ("custom_chrome_bg", "custom_chrome_bg_label"),
+        ):
+            label = getattr(self, label_attr, None)
+            if isinstance(label, QLabel):
+                preview_settings[key] = self._label_color_value(label)
+        if hasattr(self, "ui_density_combo"):
+            preview_settings["ui_density"] = str(self.ui_density_combo.currentText() or preview_settings.get("ui_density", "comfortable"))
+        return preview_settings
+
+    def _log_theme_probe(self, stage: str) -> None:
+        try:
+            tokens = build_tokens_from_settings(self._theme_probe_preview_settings())
+            host = self.settings_pages.currentWidget() if hasattr(self, "settings_pages") else None
+            scroll = host.findChild(QScrollArea, "settingsPageScroll") if isinstance(host, QWidget) else None
+            viewport = scroll.viewport() if isinstance(scroll, QScrollArea) else None
+            body = host.findChild(QWidget, "settingsPageBody") if isinstance(host, QWidget) else None
+
+            def _palette_snapshot(widget: QWidget | None) -> str:
+                if not isinstance(widget, QWidget):
+                    return "n/a"
+                pal = widget.palette()
+                return (
+                    f"window={pal.color(pal.ColorRole.Window).name()} "
+                    f"base={pal.color(pal.ColorRole.Base).name()} "
+                    f"text={pal.color(pal.ColorRole.Text).name()}"
+                )
+
+            _LOGGER.info(
+                "[SettingsThemeProbe] stage=%s dark_mode=%s text=%s surface_bg=%s input_bg=%s host_pal=(%s) scroll_pal=(%s) viewport_pal=(%s) body_pal=(%s)",
+                stage,
+                tokens.dark_mode,
+                tokens.text,
+                tokens.surface_bg,
+                tokens.input_bg,
+                _palette_snapshot(host if isinstance(host, QWidget) else None),
+                _palette_snapshot(scroll if isinstance(scroll, QScrollArea) else None),
+                _palette_snapshot(viewport if isinstance(viewport, QWidget) else None),
+                _palette_snapshot(body if isinstance(body, QWidget) else None),
+            )
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.warning("[SettingsThemeProbe] stage=%s failed: %s", stage, exc)
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        if not self._theme_probe_logged_open:
+            self._theme_probe_logged_open = True
+            self._log_theme_probe("open")
+            QTimer.singleShot(150, lambda: self._log_theme_probe("post_150ms"))
+            QTimer.singleShot(600, lambda: self._log_theme_probe("post_600ms"))
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        super().paintEvent(event)
+        if not self._theme_probe_logged_first_paint:
+            self._theme_probe_logged_first_paint = True
+            self._log_theme_probe("first_paint")
+
+    def _npp_dark_mode_preference_combo(self) -> QComboBox | None:
+        controls = getattr(self, "_npp_pref_controls", {})
+        if not isinstance(controls, dict):
+            return None
+        spec = controls.get("npp_dark_mode_preference")
+        if not isinstance(spec, dict):
+            return None
+        widget = spec.get("widget")
+        return widget if isinstance(widget, QComboBox) else None
+
+    def _sync_dark_checkbox_from_npp_preference(self) -> None:
+        combo = self._npp_dark_mode_preference_combo()
+        if combo is None:
+            return
+        pref = str(combo.currentText() or "").strip().lower()
+        if pref not in {"light", "dark"}:
+            return
+        desired_dark = pref == "dark"
+        if self.dark_checkbox.isChecked() == desired_dark:
+            return
+        self.dark_checkbox.blockSignals(True)
+        self.dark_checkbox.setChecked(desired_dark)
+        self.dark_checkbox.blockSignals(False)
+        self._apply_dialog_theme()
 
     def _label_color_value(self, label: QLabel) -> str:
         text = label.text().strip()
         return "" if text == "(auto)" else text
+
+    def _style_token_label(self, token: str) -> QLabel:
+        mapping = {
+            "keyword": self.scintilla_style_keyword_label,
+            "string": self.scintilla_style_string_label,
+            "comment": self.scintilla_style_comment_label,
+            "number": self.scintilla_style_number_label,
+        }
+        return mapping[token]
+
+    def _effective_scintilla_style_color(self, token: str, language: str) -> str:
+        theme_name = str(self.scintilla_style_theme_combo.currentText() or "default").strip().lower()
+        theme = SYNTAX_THEME_PRESETS.get(theme_name, SYNTAX_THEME_PRESETS.get("default", {}))
+        fallback = str(theme.get(token, "#000000"))
+        lang = str(language or "plain").strip().lower() or "plain"
+        local_override = self._normalize_hex(self._label_color_value(self._style_token_label(token)), "")
+        if local_override:
+            return local_override
+        lang_overrides = self._scintilla_style_overrides_working.get(lang, {})
+        if token in lang_overrides:
+            return str(lang_overrides[token])
+        shared_overrides = self._scintilla_style_overrides_working.get("plain", {})
+        if token in shared_overrides:
+            return str(shared_overrides[token])
+        return fallback
+
+    def _refresh_scintilla_style_preview(self) -> None:
+        preview = getattr(self, "scintilla_style_preview", None)
+        if not isinstance(preview, QTextEdit):
+            return
+        language = str(self.scintilla_style_language_combo.currentText() or "python").strip().lower() or "python"
+        keyword = self._effective_scintilla_style_color("keyword", language)
+        string = self._effective_scintilla_style_color("string", language)
+        comment = self._effective_scintilla_style_color("comment", language)
+        number = self._effective_scintilla_style_color("number", language)
+        sample_map = {
+            "python": (
+                f'<span style="color:{keyword}; font-weight:700;">def</span> '
+                f'total(items):<br>'
+                f'&nbsp;&nbsp;<span style="color:{comment}; font-style:italic;"># compute sum</span><br>'
+                f'&nbsp;&nbsp;count = <span style="color:{number};">0</span><br>'
+                f'&nbsp;&nbsp;<span style="color:{keyword}; font-weight:700;">for</span> item '
+                f'<span style="color:{keyword}; font-weight:700;">in</span> items:<br>'
+                f'&nbsp;&nbsp;&nbsp;&nbsp;count += item<br>'
+                f'&nbsp;&nbsp;<span style="color:{keyword}; font-weight:700;">return</span> '
+                f'<span style="color:{string};">"Total: "</span> + str(count)'
+            ),
+            "javascript": (
+                f'<span style="color:{keyword}; font-weight:700;">function</span> total(items) {{<br>'
+                f'&nbsp;&nbsp;<span style="color:{comment}; font-style:italic;">// compute sum</span><br>'
+                f'&nbsp;&nbsp;<span style="color:{keyword}; font-weight:700;">let</span> count = '
+                f'<span style="color:{number};">0</span>;<br>'
+                f'&nbsp;&nbsp;<span style="color:{keyword}; font-weight:700;">for</span> '
+                f'(<span style="color:{keyword}; font-weight:700;">const</span> item of items) {{ count += item; }}<br>'
+                f'&nbsp;&nbsp;<span style="color:{keyword}; font-weight:700;">return</span> '
+                f'<span style="color:{string};">"Total: "</span> + count;<br>'
+                f'}}'
+            ),
+            "json": (
+                f'{{<br>'
+                f'&nbsp;&nbsp;<span style="color:{keyword}; font-weight:700;">"name"</span>: '
+                f'<span style="color:{string};">"PyPad"</span>,<br>'
+                f'&nbsp;&nbsp;<span style="color:{keyword}; font-weight:700;">"count"</span>: '
+                f'<span style="color:{number};">42</span><br>'
+                f'}}'
+            ),
+            "markdown": (
+                f'<span style="color:{keyword}; font-weight:700;"># Preview Header</span><br>'
+                f'<span style="color:{comment}; font-style:italic;">*emphasis text*</span><br>'
+                f'<span style="color:{string};">`inline code`</span><br>'
+                f'Value: <span style="color:{number};">123</span>'
+            ),
+            "plain": (
+                f'<span style="color:{comment}; font-style:italic;">No syntax language selected.</span><br>'
+                f'<span style="color:{string};">Sample text</span> '
+                f'<span style="color:{number};">100</span>'
+            ),
+        }
+        body = sample_map.get(language, sample_map["plain"])
+        theme_name = html.escape(str(self.scintilla_style_theme_combo.currentText() or "default"))
+        lang_name = html.escape(language)
+        preview.setHtml(
+            "<pre style=\"font-family: Consolas, 'Courier New', monospace; margin:0;\">"
+            f"<b>Theme:</b> {theme_name} | <b>Language:</b> {lang_name}<br><br>{body}</pre>"
+        )
+
+    def _load_scintilla_style_language_controls(self, language: str) -> None:
+        lang = str(language or "python").strip().lower() or "python"
+        token_map = self._scintilla_style_overrides_working.get(lang, {})
+        for token in ("keyword", "string", "comment", "number"):
+            self._set_color_label(self._style_token_label(token), str(token_map.get(token, "")))
+        self._refresh_scintilla_style_preview()
+
+    def _capture_current_scintilla_style_language_controls(self) -> None:
+        lang = str(getattr(self, "_scintilla_style_current_language", "python") or "python").strip().lower() or "python"
+        token_map: dict[str, str] = {}
+        for token in ("keyword", "string", "comment", "number"):
+            value = self._normalize_hex(self._label_color_value(self._style_token_label(token)), "")
+            if value:
+                token_map[token] = value
+        if token_map:
+            self._scintilla_style_overrides_working[lang] = token_map
+        else:
+            self._scintilla_style_overrides_working.pop(lang, None)
+
+    def _on_scintilla_style_language_changed(self, language: str) -> None:
+        self._capture_current_scintilla_style_language_controls()
+        self._scintilla_style_current_language = str(language or "python").strip().lower() or "python"
+        self._load_scintilla_style_language_controls(self._scintilla_style_current_language)
+
+    def _reset_scintilla_style_language_overrides(self) -> None:
+        self._capture_current_scintilla_style_language_controls()
+        lang = str(self.scintilla_style_language_combo.currentText() or "python").strip().lower() or "python"
+        self._scintilla_style_overrides_working.pop(lang, None)
+        self._scintilla_style_current_language = lang
+        self._load_scintilla_style_language_controls(lang)
+
+    def _clear_scintilla_style_overrides(self) -> None:
+        self._scintilla_style_overrides_working = {}
+        lang = str(self.scintilla_style_language_combo.currentText() or "python").strip().lower() or "python"
+        self._scintilla_style_current_language = lang
+        self._load_scintilla_style_language_controls(lang)
+
+    def _load_scintilla_profile_controls(self, profile: ScintillaProfile) -> None:
+        self.scintilla_wrap_mode_combo.setCurrentText(profile.wrap_mode)
+        self.scintilla_auto_completion_mode_combo.setCurrentText(profile.auto_completion_mode)
+        self.scintilla_auto_completion_threshold_spin.setValue(int(profile.auto_completion_threshold))
+        self.scintilla_tab_width_spin.setValue(int(profile.tab_width))
+        self.scintilla_use_tabs_checkbox.setChecked(bool(profile.use_tabs))
+        self.scintilla_auto_indent_checkbox.setChecked(bool(profile.auto_indent))
+        self.scintilla_trim_trailing_checkbox.setChecked(bool(profile.trim_trailing_whitespace_on_save))
+        self.scintilla_column_mode_checkbox.setChecked(bool(profile.column_mode))
+        self.scintilla_multi_caret_checkbox.setChecked(bool(profile.multi_caret))
+        self.scintilla_code_folding_checkbox.setChecked(bool(profile.code_folding))
+        self.scintilla_show_space_tab_checkbox.setChecked(bool(profile.show_space_tab))
+        self.scintilla_show_eol_checkbox.setChecked(bool(profile.show_eol))
+        self.scintilla_show_non_printing_checkbox.setChecked(bool(profile.show_non_printing))
+        self.scintilla_show_control_chars_checkbox.setChecked(bool(profile.show_control_chars))
+        self.scintilla_show_all_chars_checkbox.setChecked(bool(profile.show_all_chars))
+        self.scintilla_show_indent_guides_checkbox.setChecked(bool(profile.show_indent_guides))
+        self.scintilla_show_wrap_symbol_checkbox.setChecked(bool(profile.show_wrap_symbol))
+        self.scintilla_line_numbers_checkbox.setChecked(bool(profile.line_numbers_visible))
+        self.scintilla_margin_left_spin.setValue(int(profile.margin_left_px))
+        self.scintilla_margin_right_spin.setValue(int(profile.margin_right_px))
+        self.scintilla_line_number_width_mode_combo.setCurrentText(profile.line_number_width_mode)
+        self.scintilla_line_number_width_spin.setValue(int(profile.line_number_width_px))
+        self.scintilla_line_number_width_spin.setEnabled(profile.line_number_width_mode == "constant")
+        self.scintilla_caret_width_spin.setValue(int(profile.caret_width_px))
+        self.scintilla_highlight_current_line_checkbox.setChecked(bool(profile.highlight_current_line))
+        self.scintilla_style_theme_combo.setCurrentText(str(profile.style_theme or "default"))
+        self._scintilla_style_overrides_working = dict(profile.style_overrides)
+        self._scintilla_style_current_language = str(self.scintilla_style_language_combo.currentText() or "python").strip().lower() or "python"
+        self._load_scintilla_style_language_controls(self._scintilla_style_current_language)
+
+    def _collect_scintilla_profile_from_controls(self) -> ScintillaProfile:
+        self._capture_current_scintilla_style_language_controls()
+        return ScintillaProfile(
+            wrap_mode=self.scintilla_wrap_mode_combo.currentText(),
+            auto_completion_mode=self.scintilla_auto_completion_mode_combo.currentText(),
+            auto_completion_threshold=int(self.scintilla_auto_completion_threshold_spin.value()),
+            tab_width=int(self.scintilla_tab_width_spin.value()),
+            use_tabs=self.scintilla_use_tabs_checkbox.isChecked(),
+            auto_indent=self.scintilla_auto_indent_checkbox.isChecked(),
+            trim_trailing_whitespace_on_save=self.scintilla_trim_trailing_checkbox.isChecked(),
+            column_mode=self.scintilla_column_mode_checkbox.isChecked(),
+            multi_caret=self.scintilla_multi_caret_checkbox.isChecked(),
+            code_folding=self.scintilla_code_folding_checkbox.isChecked(),
+            show_space_tab=self.scintilla_show_space_tab_checkbox.isChecked(),
+            show_eol=self.scintilla_show_eol_checkbox.isChecked(),
+            show_non_printing=self.scintilla_show_non_printing_checkbox.isChecked(),
+            show_control_chars=self.scintilla_show_control_chars_checkbox.isChecked(),
+            show_all_chars=self.scintilla_show_all_chars_checkbox.isChecked(),
+            show_indent_guides=self.scintilla_show_indent_guides_checkbox.isChecked(),
+            show_wrap_symbol=self.scintilla_show_wrap_symbol_checkbox.isChecked(),
+            line_numbers_visible=self.scintilla_line_numbers_checkbox.isChecked(),
+            margin_left_px=int(self.scintilla_margin_left_spin.value()),
+            margin_right_px=int(self.scintilla_margin_right_spin.value()),
+            line_number_width_mode=self.scintilla_line_number_width_mode_combo.currentText(),
+            line_number_width_px=int(self.scintilla_line_number_width_spin.value()),
+            caret_width_px=int(self.scintilla_caret_width_spin.value()),
+            highlight_current_line=self.scintilla_highlight_current_line_checkbox.isChecked(),
+            style_theme=self.scintilla_style_theme_combo.currentText(),
+            style_overrides=dict(self._scintilla_style_overrides_working),
+        ).sanitized()
 
     def _load_controls_from_settings(self, s: dict) -> None:
         self.dark_checkbox.setChecked(bool(s.get("dark_mode", False)))
@@ -838,6 +1395,7 @@ class SettingsDialog(QDialog):
         self.trim_trailing_checkbox.setChecked(bool(s.get("trim_trailing_whitespace_on_save", False)))
         self.caret_width_spin.setValue(int(s.get("caret_width_px", 1)))
         self.highlight_current_line_checkbox.setChecked(bool(s.get("highlight_current_line", True)))
+        self._load_scintilla_profile_controls(ScintillaProfile.from_settings(s))
 
         self.language_combo.setCurrentText(str(s.get("language", "English")))
 
@@ -894,6 +1452,25 @@ class SettingsDialog(QDialog):
         )
         self.ai_verbose_logging_checkbox.setChecked(bool(s.get("ai_verbose_logging", False)))
         self.ai_cost_rate_spin.setValue(float(s.get("ai_estimated_cost_per_1k_tokens", 0.0005) or 0.0005))
+        self.lsp_definition_enabled_checkbox.setChecked(bool(s.get("lsp_definition_enabled", True)))
+        self.lsp_init_timeout_spin.setValue(float(s.get("lsp_definition_initialize_timeout_sec", 5.0) or 5.0))
+        self.lsp_request_timeout_spin.setValue(float(s.get("lsp_definition_request_timeout_sec", 3.0) or 3.0))
+        self.lsp_retries_spin.setValue(int(s.get("lsp_definition_retries", 2)))
+        self.lsp_verbose_logging_checkbox.setChecked(bool(s.get("lsp_definition_verbose_logging", False)))
+        py_servers = s.get("lsp_python_servers", [])
+        js_servers = s.get("lsp_javascript_servers", [])
+        ts_servers = s.get("lsp_typescript_servers", [])
+        self.lsp_python_servers_edit.setText(", ".join(py_servers if isinstance(py_servers, list) else []))
+        self.lsp_javascript_servers_edit.setText(", ".join(js_servers if isinstance(js_servers, list) else []))
+        self.lsp_typescript_servers_edit.setText(", ".join(ts_servers if isinstance(ts_servers, list) else []))
+        lsp_enabled = self.lsp_definition_enabled_checkbox.isChecked()
+        self.lsp_init_timeout_spin.setEnabled(lsp_enabled)
+        self.lsp_request_timeout_spin.setEnabled(lsp_enabled)
+        self.lsp_retries_spin.setEnabled(lsp_enabled)
+        self.lsp_verbose_logging_checkbox.setEnabled(lsp_enabled)
+        self.lsp_python_servers_edit.setEnabled(lsp_enabled)
+        self.lsp_javascript_servers_edit.setEnabled(lsp_enabled)
+        self.lsp_typescript_servers_edit.setEnabled(lsp_enabled)
 
         self.privacy_lock_checkbox.setChecked(bool(s.get("privacy_lock", False)))
         self.lock_password_edit.setText(str(s.get("lock_password", "")))
@@ -950,6 +1527,7 @@ class SettingsDialog(QDialog):
         s["trim_trailing_whitespace_on_save"] = self.trim_trailing_checkbox.isChecked()
         s["caret_width_px"] = int(self.caret_width_spin.value())
         s["highlight_current_line"] = self.highlight_current_line_checkbox.isChecked()
+        self._collect_scintilla_profile_from_controls().apply_to_settings(s)
 
         s["language"] = self.language_combo.currentText()
 
@@ -1002,6 +1580,14 @@ class SettingsDialog(QDialog):
         )
         s["ai_verbose_logging"] = self.ai_verbose_logging_checkbox.isChecked()
         s["ai_estimated_cost_per_1k_tokens"] = float(self.ai_cost_rate_spin.value())
+        s["lsp_definition_enabled"] = self.lsp_definition_enabled_checkbox.isChecked()
+        s["lsp_definition_initialize_timeout_sec"] = float(self.lsp_init_timeout_spin.value())
+        s["lsp_definition_request_timeout_sec"] = float(self.lsp_request_timeout_spin.value())
+        s["lsp_definition_retries"] = int(self.lsp_retries_spin.value())
+        s["lsp_definition_verbose_logging"] = self.lsp_verbose_logging_checkbox.isChecked()
+        s["lsp_python_servers"] = [v.strip() for v in self.lsp_python_servers_edit.text().split(",") if v.strip()]
+        s["lsp_javascript_servers"] = [v.strip() for v in self.lsp_javascript_servers_edit.text().split(",") if v.strip()]
+        s["lsp_typescript_servers"] = [v.strip() for v in self.lsp_typescript_servers_edit.text().split(",") if v.strip()]
 
         s["privacy_lock"] = self.privacy_lock_checkbox.isChecked()
         s["lock_password"] = self.lock_password_edit.text()
@@ -1091,6 +1677,46 @@ class SettingsDialog(QDialog):
     def restore_settings(self) -> None:
         self._import_profile()
 
+    def _export_scintilla_profile(self) -> None:
+        path, _ = themed_file_dialog_get_save_file_name(
+            self,
+            "Export Scintilla Profile",
+            "",
+            "Scintilla Profile (*.json);;All Files (*.*)",
+        )
+        if not path:
+            return
+        payload = self._collect_scintilla_profile_from_controls().to_json_dict()
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "Export Scintilla Profile Failed", f"Could not export profile:\n{exc}")
+
+    def _import_scintilla_profile(self) -> None:
+        path, _ = themed_file_dialog_get_open_file_name(
+            self,
+            "Import Scintilla Profile",
+            "",
+            "Scintilla Profile (*.json);;All Files (*.*)",
+        )
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            if not isinstance(loaded, dict):
+                raise ValueError("Profile must be a JSON object.")
+            profile = ScintillaProfile.from_json_dict(loaded)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "Import Scintilla Profile Failed", f"Could not import profile:\n{exc}")
+            return
+        self._load_scintilla_profile_controls(profile)
+
+    def _reset_scintilla_profile_defaults(self) -> None:
+        defaults = self._parent_window._build_default_settings()
+        self._load_scintilla_profile_controls(ScintillaProfile.from_settings(defaults))
+
     def _edit_with_settings_json(self) -> None:
         if not self._apply_to_memory():
             return
@@ -1113,8 +1739,22 @@ class SettingsDialog(QDialog):
         if picked:
             self.backup_output_dir_edit.setText(picked)
 
+    def _request_factory_reset(self) -> None:
+        confirm = QMessageBox.question(
+            self,
+            "Factory Reset",
+            "Reset all settings to defaults and close the app?\n\nThis cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        self.reset_to_defaults_requested = True
+        self.accept()
+
     def _clear_translation_cache(self) -> None:
         if hasattr(self._parent_window, "clear_translation_cache"):
             self._parent_window.clear_translation_cache()
             QMessageBox.information(self, "Translation Cache", "Translation cache cleared.")
+
 

@@ -2,6 +2,7 @@
 
 from .coercion import coerce_bool, migrate_settings, normalize_ui_visibility_settings
 from .defaults import build_default_settings
+from .scintilla_profile import ScintillaProfile
 from .paths import (
     get_autosave_dir_path,
     get_crash_logs_file_path,
@@ -16,6 +17,7 @@ from .paths import (
 
 __all__ = [
     "build_default_settings",
+    "ScintillaProfile",
     "coerce_bool",
     "migrate_settings",
     "normalize_ui_visibility_settings",

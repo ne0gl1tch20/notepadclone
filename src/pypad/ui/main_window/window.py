@@ -64,22 +64,22 @@ from PySide6.QtWidgets import (
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtPrintSupport import QPrintDialog, QPrintPreviewDialog, QPrinter
 
-from ..debug_logs_dialog import DebugLogsDialog
-from ..detachable_tab_bar import DetachableTabBar
-from ..editor_tab import EditorTab
-from ..ai_controller import AIController
-from ..ai_chat_dock import AIChatDock
-from ..asset_paths import resolve_asset_path
-from ..autosave import AutoSaveRecoveryDialog, AutoSaveStore
-from ..session_recovery import RecoveryStateStore
-from ..reminders import ReminderStore, RemindersDialog
-from ..security_controller import SecurityController
-from ..syntax_highlighter import CodeSyntaxHighlighter
-from ..updater_controller import UpdaterController
-from ..version_history import VersionHistoryDialog
-from ..workspace_controller import WorkspaceController
-from ..advanced_features import AdvancedFeaturesController
-from ...i18n.translator import AppTranslator
+from pypad.ui.debug.debug_logs_dialog import DebugLogsDialog
+from pypad.ui.editor.detachable_tab_bar import DetachableTabBar
+from pypad.ui.editor.editor_tab import EditorTab
+from pypad.ui.ai.ai_controller import AIController
+from pypad.ui.ai.ai_chat_dock import AIChatDock
+from pypad.ui.theme.asset_paths import resolve_asset_path
+from pypad.ui.system.autosave import AutoSaveRecoveryDialog, AutoSaveStore
+from pypad.ui.system.session_recovery import RecoveryStateStore
+from pypad.ui.system.reminders import ReminderStore, RemindersDialog
+from pypad.ui.security.security_controller import SecurityController
+from pypad.ui.editor.syntax_highlighter import CodeSyntaxHighlighter
+from pypad.ui.system.updater_controller import UpdaterController
+from pypad.ui.system.version_history import VersionHistoryDialog
+from pypad.ui.workspace.workspace_controller import WorkspaceController
+from pypad.ui.features.advanced_features import AdvancedFeaturesController
+from pypad.i18n.translator import AppTranslator
 
 from .ui_setup import UiSetupMixin
 from .file_ops import FileOpsMixin
@@ -192,6 +192,7 @@ class Notepad(UiSetupMixin, FileOpsMixin, EditOpsMixin, ViewOpsMixin, MiscMixin,
             self.apply_logging_preferences()
         self.log_event("Info", f"[Startup] Settings loaded from: {self.settings_file}")
         self._page_layout_view_enabled = bool(self.settings.get("page_layout_view_enabled", False))
+        self.line_numbers_enabled = bool(self.settings.get("npp_margin_line_numbers_enabled", True))
         _mark_startup_stage("settings_loaded")
         self.translator = AppTranslator(self._get_translation_cache_path())
         self.log_event("Info", "[Startup] Translator initialized")
@@ -258,6 +259,9 @@ class Notepad(UiSetupMixin, FileOpsMixin, EditOpsMixin, ViewOpsMixin, MiscMixin,
         self.ai_usage_label = QLabel("AI: 0 req | ~0 tok | ~$0.0000", self)
         self.ai_usage_label.setMargin(3)
         self.status.addPermanentWidget(self.ai_usage_label)
+        self.autosave_status_label = QLabel("Autosave: waiting", self)
+        self.autosave_status_label.setMargin(3)
+        self.status.addPermanentWidget(self.autosave_status_label)
         self.log_event("Info", "[Startup] Status bar widgets attached")
         self.advanced_features = AdvancedFeaturesController(self)
         _mark_startup_stage("advanced_features_ready")
@@ -304,7 +308,14 @@ class Notepad(UiSetupMixin, FileOpsMixin, EditOpsMixin, ViewOpsMixin, MiscMixin,
             if startup_files or startup_folders:
                 self._open_startup_items(startup_files, startup_folders)
             else:
-                self.restore_last_session()
+                profile_handled = False
+                if hasattr(self, "apply_workspace_profile_on_startup"):
+                    try:
+                        profile_handled = bool(self.apply_workspace_profile_on_startup())
+                    except Exception as exc:  # noqa: BLE001
+                        self.log_event("Error", f"[Startup] workspace profile startup failed: {exc!r}")
+                if not profile_handled:
+                    self.restore_last_session()
             self.log_event("Info", "[Startup] Session restore completed")
             self.update_action_states()
             self.log_event("Info", "Pypad initialized")
@@ -389,3 +400,4 @@ class Notepad(UiSetupMixin, FileOpsMixin, EditOpsMixin, ViewOpsMixin, MiscMixin,
                     break
         if opened:
             self.log_event("Info", f"Opened on startup: {', '.join(opened)}")
+

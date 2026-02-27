@@ -1,4 +1,4 @@
-﻿# Literally my biggest script ever
+# Literally my biggest script ever
 from __future__ import annotations
 import getpass
 import importlib.metadata as importlib_metadata
@@ -8,6 +8,7 @@ import json
 import os
 import random
 import re
+import shutil
 import sys
 import time
 import webbrowser
@@ -78,13 +79,13 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtPrintSupport import QPrintDialog, QPrintPreviewDialog, QPrinter
-from ...logging_utils import get_logger
+from pypad.logging_utils import get_logger
 
 _LOGGER = get_logger(__name__)
 
-from ..debug_logs_dialog import DebugLogsDialog
-from ..detachable_tab_bar import DetachableTabBar
-from ..editor_tab import EditorTab
+from pypad.ui.debug.debug_logs_dialog import DebugLogsDialog
+from pypad.ui.editor.detachable_tab_bar import DetachableTabBar
+from pypad.ui.editor.editor_tab import EditorTab
 from ...app_settings import (
     get_crash_logs_file_path,
     get_debug_logs_file_path,
@@ -97,23 +98,24 @@ from ...app_settings import (
     get_settings_file_path,
     get_translation_cache_path,
 )
-from ...app_settings.defaults import DEFAULT_UPDATE_FEED_URL
-from ..ai_controller import AIController
-from ..ai_edit_preview_dialog import AIEditPreviewDialog
-from ..asset_paths import resolve_asset_path
-from ..autosave import AutoSaveRecoveryDialog, AutoSaveStore
-from ..reminders import ReminderStore, RemindersDialog
-from ..security_controller import SecurityController
-from ..syntax_highlighter import CodeSyntaxHighlighter
-from ..updater_controller import UpdaterController
-from ..version_history import VersionEntry, VersionHistoryDialog
-from ..workspace_controller import WorkspaceController
-from ..dialog_theme import apply_dialog_theme_from_window, ensure_dialog_theme_filter_installed
-from ..theme_tokens import build_main_window_qss, build_tokens_from_settings
-from ..session_recovery import local_history_key
-from ..advanced_text_tools import build_line_refs, export_line_refs_text
-from ..document_fidelity import DocumentFidelityError, export_document_text, render_text_to_html
-from ..extensibility_ops import discover_window_actions
+from pypad.app_settings.defaults import DEFAULT_UPDATE_FEED_URL
+from pypad.app_settings.scintilla_profile import ScintillaProfile
+from pypad.ui.ai.ai_controller import AIController
+from pypad.ui.ai.ai_edit_preview_dialog import AIEditPreviewDialog
+from pypad.ui.theme.asset_paths import resolve_asset_path
+from pypad.ui.system.autosave import AutoSaveRecoveryDialog, AutoSaveStore
+from pypad.ui.system.reminders import ReminderStore, RemindersDialog
+from pypad.ui.security.security_controller import SecurityController
+from pypad.ui.editor.syntax_highlighter import CodeSyntaxHighlighter
+from pypad.ui.system.updater_controller import UpdaterController
+from pypad.ui.system.version_history import VersionEntry, VersionHistoryDialog
+from pypad.ui.workspace.workspace_controller import WorkspaceController
+from pypad.ui.theme.dialog_theme import apply_dialog_theme_from_window, ensure_dialog_theme_filter_installed
+from pypad.ui.theme.theme_tokens import build_main_window_qss, build_tokens_from_settings
+from pypad.ui.system.session_recovery import local_history_key
+from pypad.ui.editor.advanced_text_tools import build_line_refs, export_line_refs_text
+from pypad.ui.document.document_fidelity import DocumentFidelityError, export_document_text, render_text_to_html
+from pypad.ui.features.extensibility_ops import discover_window_actions
 from .notepadpp_pref_runtime import (
     apply_notepadpp_runtime_settings,
     apply_indentation_defaults_to_tab,
@@ -121,7 +123,7 @@ from .notepadpp_pref_runtime import (
     recent_file_max_entries,
     recent_file_menu_label,
 )
-from ..ai_collaboration import (
+from pypad.ui.ai.ai_collaboration import (
     build_ai_conflict_merge_prompt,
     build_conflict_markers,
     build_project_qa_prompt,
@@ -131,11 +133,11 @@ from ..ai_collaboration import (
     strip_model_fences,
 )
 from .settings_dialog import SettingsDialog as SidebarSettingsDialog
-from ..tutorial_dialog import InteractiveTutorialDialog
-from ..shortcut_mapper import PRESET_SHORTCUTS, ShortcutActionRow, ShortcutMapperDialog, parse_shortcut_value, sequence_to_string
-from ..command_palette import CommandPaletteDialog, PaletteItem
-from ..quick_open_dialog import QuickOpenDialog, QuickOpenEntry, extract_symbol_rows
-from ...i18n.translator import language_code_for
+from pypad.ui.features.tutorial_dialog import InteractiveTutorialDialog
+from pypad.ui.editor.shortcut_mapper import PRESET_SHORTCUTS, ShortcutActionRow, ShortcutMapperDialog, parse_shortcut_value, sequence_to_string
+from pypad.ui.editor.command_palette import CommandPaletteDialog, PaletteItem
+from pypad.ui.editor.quick_open_dialog import QuickOpenDialog, QuickOpenEntry, extract_symbol_rows
+from pypad.i18n.translator import language_code_for
 
 
 
@@ -1245,6 +1247,109 @@ class MiscMixin:
 
     def open_workspace_folder(self) -> None:
         self.workspace_controller.open_workspace_folder()
+
+    def _workspace_profiles(self) -> dict[str, dict[str, object]]:
+        raw = self.settings.get("workspace_profiles", {})
+        if not isinstance(raw, dict):
+            return {}
+        cleaned: dict[str, dict[str, object]] = {}
+        for key, value in raw.items():
+            name = str(key).strip()
+            if not name or not isinstance(value, dict):
+                continue
+            root = str(value.get("root", "") or "").strip()
+            if not root:
+                continue
+            cleaned[name] = {
+                "root": root,
+                "restore_session": bool(value.get("restore_session", True)),
+            }
+        return cleaned
+
+    def save_workspace_profile(self) -> None:
+        root = self._workspace_root()
+        if not root:
+            QMessageBox.information(self, "Workspace Profile", "Set a workspace folder first.")
+            return
+        profiles = self._workspace_profiles()
+        suggested = str(self.settings.get("workspace_startup_last_profile", "") or "").strip() or Path(root).name or "Workspace"
+        name, ok = QInputDialog.getText(self, "Save Workspace Profile", "Profile name:", text=suggested)
+        if not ok or not name.strip():
+            return
+        profile_name = name.strip()
+        restore = QMessageBox.question(
+            self,
+            "Save Workspace Profile",
+            "Restore last session when this profile is selected?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        profiles[profile_name] = {
+            "root": root,
+            "restore_session": restore == QMessageBox.Yes,
+        }
+        self.settings["workspace_profiles"] = profiles
+        self.settings["workspace_startup_last_profile"] = profile_name
+        self.save_settings_to_disk()
+        self.show_status_message(f'Workspace profile saved: "{profile_name}"', 2500)
+
+    def load_workspace_profile(self) -> None:
+        profiles = self._workspace_profiles()
+        if not profiles:
+            QMessageBox.information(self, "Workspace Profile", "No workspace profiles saved yet.")
+            return
+        names = sorted(profiles.keys(), key=str.lower)
+        current = str(self.settings.get("workspace_startup_last_profile", "") or "").strip()
+        default_idx = names.index(current) if current in names else 0
+        chosen, ok = QInputDialog.getItem(self, "Load Workspace Profile", "Profile:", names, default_idx, False)
+        if not ok or not chosen:
+            return
+        profile = profiles.get(chosen, {})
+        root = str(profile.get("root", "") or "").strip()
+        if not root or not Path(root).exists():
+            QMessageBox.warning(self, "Workspace Profile", f"Workspace path not found:\n{root}")
+            return
+        self.settings["workspace_root"] = root
+        self.settings["workspace_startup_last_profile"] = chosen
+        self.save_settings_to_disk()
+        if hasattr(self, "_refresh_workspace_dock"):
+            self._refresh_workspace_dock()
+        self.show_status_message(f"Workspace: {root}", 3000)
+        if bool(profile.get("restore_session", True)):
+            self.restore_last_session()
+
+    def toggle_workspace_startup_picker(self, checked: bool) -> None:
+        self.settings["workspace_startup_picker_enabled"] = bool(checked)
+        self.save_settings_to_disk()
+        self.show_status_message(
+            "Workspace startup picker enabled." if checked else "Workspace startup picker disabled.",
+            2200,
+        )
+
+    def apply_workspace_profile_on_startup(self) -> bool:
+        if not bool(self.settings.get("workspace_startup_picker_enabled", False)):
+            return False
+        profiles = self._workspace_profiles()
+        if not profiles:
+            return False
+        names = sorted(profiles.keys(), key=str.lower)
+        last_name = str(self.settings.get("workspace_startup_last_profile", "") or "").strip()
+        default_idx = names.index(last_name) if last_name in names else 0
+        chosen, ok = QInputDialog.getItem(self, "Workspace Profile", "Select startup profile:", names, default_idx, False)
+        if not ok or not chosen:
+            return False
+        profile = profiles.get(chosen, {})
+        root = str(profile.get("root", "") or "").strip()
+        if root and Path(root).exists():
+            self.settings["workspace_root"] = root
+            if hasattr(self, "_refresh_workspace_dock"):
+                self._refresh_workspace_dock()
+            self.show_status_message(f"Workspace: {root}", 3000)
+        self.settings["workspace_startup_last_profile"] = chosen
+        self.save_settings_to_disk()
+        if bool(profile.get("restore_session", True)):
+            self.restore_last_session()
+        return True
 
     def _workspace_root(self) -> str | None:
         return self.workspace_controller.workspace_root()
@@ -4328,7 +4433,10 @@ class MiscMixin:
 
     def _run_autosave_cycle(self) -> None:
         if not self.settings.get("autosave_enabled", True):
+            if hasattr(self, "autosave_status_label"):
+                self.autosave_status_label.setText("Autosave: off")
             return
+        saved_count = 0
         for index in range(self.tab_widget.count()):
             tab = self.tab_widget.widget(index)
             if not isinstance(tab, EditorTab):
@@ -4352,12 +4460,17 @@ class MiscMixin:
                     original_path=tab.current_file or "",
                     title=self._tab_display_name(tab),
                 )
+                saved_count += 1
                 if hasattr(self, "_persist_tab_local_history"):
                     self._persist_tab_local_history(tab)
             except Exception:
                 continue
         self.autosave_store.save()
         self._capture_crash_snapshot()
+        if hasattr(self, "autosave_status_label"):
+            stamp = datetime.now().strftime("%H:%M:%S")
+            if saved_count > 0:
+                self.autosave_status_label.setText(f"Autosaved at {stamp}")
 
     def _clear_tab_autosave(self, tab: EditorTab) -> None:
         if not tab.autosave_id:
@@ -4575,6 +4688,7 @@ class MiscMixin:
 
     def apply_settings(self) -> None:
         self.settings = migrate_settings(dict(self.settings))
+        profile = ScintillaProfile.from_settings(self.settings)
         if hasattr(self, "apply_logging_preferences"):
             self.apply_logging_preferences()
         _LOGGER.debug("Applying runtime settings (logging level=%s)", self.settings.get("logging_level", "INFO"))
@@ -4679,6 +4793,10 @@ class MiscMixin:
             self.search_panel_action.blockSignals(True)
             self.search_panel_action.setChecked(show_find_panel)
             self.search_panel_action.blockSignals(False)
+        if hasattr(self, "workspace_startup_picker_action"):
+            self.workspace_startup_picker_action.blockSignals(True)
+            self.workspace_startup_picker_action.setChecked(bool(self.settings.get("workspace_startup_picker_enabled", False)))
+            self.workspace_startup_picker_action.blockSignals(False)
         if hasattr(self, "_layout_top_toolbars"):
             self._layout_top_toolbars()
         if hasattr(self, "_restore_layout_from_settings") and not getattr(self, "_layout_restored_once", False):
@@ -4696,6 +4814,28 @@ class MiscMixin:
             self.page_layout_view_action.blockSignals(True)
             self.page_layout_view_action.setChecked(self._page_layout_view_enabled)
             self.page_layout_view_action.blockSignals(False)
+        self.line_numbers_enabled = bool(self.settings.get("npp_margin_line_numbers_enabled", True))
+        self.word_wrap_enabled = bool(profile.wrap_mode == "word")
+        if hasattr(self, "word_wrap_action"):
+            self.word_wrap_action.blockSignals(True)
+            self.word_wrap_action.setChecked(self.word_wrap_enabled)
+            self.word_wrap_action.blockSignals(False)
+        if hasattr(self, "column_mode_action"):
+            self.column_mode_action.blockSignals(True)
+            self.column_mode_action.setChecked(bool(profile.column_mode))
+            self.column_mode_action.blockSignals(False)
+        if hasattr(self, "multi_caret_action"):
+            self.multi_caret_action.blockSignals(True)
+            self.multi_caret_action.setChecked(bool(profile.multi_caret))
+            self.multi_caret_action.blockSignals(False)
+        if hasattr(self, "code_folding_action"):
+            self.code_folding_action.blockSignals(True)
+            self.code_folding_action.setChecked(bool(profile.code_folding))
+            self.code_folding_action.blockSignals(False)
+        if hasattr(self, "show_line_numbers_action"):
+            self.show_line_numbers_action.blockSignals(True)
+            self.show_line_numbers_action.setChecked(self.line_numbers_enabled)
+            self.show_line_numbers_action.blockSignals(False)
         if hasattr(self, "_set_editor_print_view_styles"):
             self._set_editor_print_view_styles(bool(self._page_layout_view_enabled and not getattr(self, "_print_view_enabled", False)))
 
@@ -4708,8 +4848,12 @@ class MiscMixin:
         autosave_interval = int(self.settings.get("autosave_interval_sec", 30))
         if self.settings.get("autosave_enabled", True) and autosave_interval > 0:
             self.autosave_timer.start(autosave_interval * 1000)
+            if hasattr(self, "autosave_status_label"):
+                self.autosave_status_label.setText("Autosave: running")
         else:
             self.autosave_timer.stop()
+            if hasattr(self, "autosave_status_label"):
+                self.autosave_status_label.setText("Autosave: off")
 
         if hasattr(self, "syntax_combo"):
             self.syntax_combo.setEnabled(self.settings.get("syntax_highlighting_enabled", True))
@@ -4723,16 +4867,33 @@ class MiscMixin:
         for index in range(self.tab_widget.count()):
             tab = self.tab_widget.widget(index)
             if isinstance(tab, EditorTab):
+                if hasattr(tab.text_edit, "set_theme_colors"):
+                    tab.text_edit.set_theme_colors(
+                        background=tokens.editor_bg,
+                        foreground=tokens.text,
+                        selection_bg=tokens.selection_bg,
+                        selection_fg=tokens.selection_fg,
+                        caret_line_bg=tokens.tab_hover_bg,
+                        gutter_bg=tokens.chrome_bg,
+                        gutter_fg=tokens.text_muted,
+                    )
                 self._apply_syntax_highlighting(tab)
                 tab.version_history.max_entries = int(self.settings.get("version_history_max_entries", 50))
                 self._apply_tab_color(tab)
-                tab.show_space_tab = bool(self.settings.get("show_symbol_space_tab", False))
-                tab.show_eol = bool(self.settings.get("show_symbol_eol", False))
-                tab.show_non_printing = bool(self.settings.get("show_symbol_non_printing", False))
-                tab.show_control_chars = bool(self.settings.get("show_symbol_control_chars", False))
-                tab.show_all_chars = bool(self.settings.get("show_symbol_all_chars", False))
-                tab.show_indent_guides = bool(self.settings.get("show_symbol_indent_guide", True))
-                tab.show_wrap_symbol = bool(self.settings.get("show_symbol_wrap_symbol", False))
+                tab.column_mode = bool(profile.column_mode)
+                tab.multi_caret = bool(profile.multi_caret)
+                tab.code_folding = bool(profile.code_folding)
+                tab.auto_completion_mode = str(profile.auto_completion_mode or "all").lower()
+                tab.show_space_tab = bool(profile.show_space_tab)
+                tab.show_eol = bool(profile.show_eol)
+                tab.show_non_printing = bool(profile.show_non_printing)
+                tab.show_control_chars = bool(profile.show_control_chars)
+                tab.show_all_chars = bool(profile.show_all_chars)
+                tab.show_indent_guides = bool(profile.show_indent_guides)
+                tab.show_wrap_symbol = bool(profile.show_wrap_symbol)
+                tab.show_line_numbers = bool(profile.line_numbers_visible)
+                tab.text_edit.set_wrap_enabled(profile.wrap_mode == "word")
+                tab.text_edit.configure_indentation(tab_width=profile.tab_width, use_tabs=profile.use_tabs)
                 if hasattr(self, "_apply_scintilla_modes"):
                     self._apply_scintilla_modes(tab)
                 apply_indentation_defaults_to_tab(self, tab)
@@ -4742,11 +4903,24 @@ class MiscMixin:
             self.toggle_simple_mode(True)
         else:
             self.toggle_simple_mode(False)
-        self.setWindowFlag(Qt.WindowStaysOnTopHint, bool(self.settings.get("always_on_top", False)))
-        self.setWindowFlag(Qt.Tool, bool(self.settings.get("post_it_mode", False)))
-        # Re-show only if already visible. Startup window showing is owned by app/run entrypoints.
-        if self.isVisible():
-            self.show()
+        desired_on_top = bool(self.settings.get("always_on_top", False))
+        desired_tool = bool(self.settings.get("post_it_mode", False))
+        current_flags = self.windowFlags()
+        current_on_top = bool(current_flags & Qt.WindowType.WindowStaysOnTopHint)
+        current_tool = bool(current_flags & Qt.WindowType.Tool)
+        if current_on_top != desired_on_top or current_tool != desired_tool:
+            # Updating top-level window flags can transiently hide the main window.
+            # Avoid accidental app quit from QApplication.quitOnLastWindowClosed during this transition.
+            prev_quit_on_last = None
+            if app is not None:
+                prev_quit_on_last = app.quitOnLastWindowClosed()
+                app.setQuitOnLastWindowClosed(False)
+            self.setWindowFlag(Qt.WindowStaysOnTopHint, desired_on_top)
+            self.setWindowFlag(Qt.Tool, desired_tool)
+            if self.isVisible():
+                self.show()
+            if app is not None and prev_quit_on_last is not None:
+                app.setQuitOnLastWindowClosed(prev_quit_on_last)
         self._refresh_ai_usage_label()
         self.apply_language()
         apply_notepadpp_runtime_settings(self)
@@ -4977,10 +5151,90 @@ class MiscMixin:
             if getattr(dlg, "reset_to_defaults_requested", False):
                 self.reset_settings_to_default_and_close()
                 return
-            self.settings = dlg.get_settings()
-            self.apply_settings()
-            self.save_settings_to_disk()
-            self.log_event("Info", "Settings applied and saved")
+            current_settings = dict(self.settings)
+            next_settings = dlg.get_settings()
+            restart_required = self._settings_change_requires_restart(current_settings, next_settings)
+
+            def _apply_after_dialog_close() -> None:
+                try:
+                    self.settings = next_settings
+                    self.apply_settings()
+                    self.save_settings_to_disk()
+                    self.log_event("Info", "Settings applied and saved")
+                    if restart_required:
+                        self.log_event("Info", "Theme-related settings changed; restarting app.")
+                        self._restart_app_after_theme_change()
+                except Exception as exc:
+                    _LOGGER.exception("Failed applying settings from preferences dialog")
+                    QMessageBox.critical(
+                        self,
+                        "Apply Settings Failed",
+                        f"An error occurred while applying settings.\n\n{exc}",
+                    )
+
+            # Run after the modal dialog teardown to avoid UI re-entrancy stalls.
+            QTimer.singleShot(0, _apply_after_dialog_close)
+
+    @staticmethod
+    def _settings_change_requires_restart(current: dict[str, Any], updated: dict[str, Any]) -> bool:
+        restart_keys = (
+            "theme",
+            "app_style",
+            "dark_mode",
+            "use_custom_colors",
+            "custom_editor_bg",
+            "custom_editor_fg",
+            "custom_chrome_bg",
+            "accent_color",
+            "ui_density",
+        )
+        for key in restart_keys:
+            if current.get(key) != updated.get(key):
+                return True
+        return False
+
+    @staticmethod
+    def _build_restart_command() -> list[str]:
+        args = [str(a) for a in sys.argv[1:]]
+        if getattr(sys, "frozen", False):
+            return [str(Path(sys.executable).resolve()), *args]
+        script_candidates: list[Path] = []
+        main_file_raw = str(getattr(sys.modules.get("__main__"), "__file__", "") or "").strip()
+        if main_file_raw:
+            script_candidates.append(Path(main_file_raw).resolve())
+        argv0_raw = str(sys.argv[0] or "").strip()
+        if argv0_raw and argv0_raw not in {"-c", "-m"}:
+            script_candidates.append(Path(argv0_raw).resolve())
+        for script in script_candidates:
+            if script.exists() and script.is_file():
+                return [str(Path(sys.executable).resolve()), str(script), *args]
+        return [str(Path(sys.executable).resolve()), *args]
+
+    def _restart_app_after_theme_change(self) -> None:
+        command = self._build_restart_command()
+        popen_kwargs: dict[str, Any] = {"cwd": str(Path.cwd())}
+        if os.name == "nt":
+            detached = int(getattr(subprocess, "DETACHED_PROCESS", 0))
+            new_group = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+            popen_kwargs["creationflags"] = detached | new_group
+            popen_kwargs["close_fds"] = True
+        else:
+            popen_kwargs["start_new_session"] = True
+        try:
+            subprocess.Popen(command, **popen_kwargs)
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.exception("Failed to relaunch app for theme restart")
+            QMessageBox.critical(
+                self,
+                "Restart Failed",
+                "Theme changes require restart, but relaunch failed.\n\n"
+                f"Command: {' '.join(command)}\nError: {exc}",
+            )
+            return
+        QMessageBox.information(self, "Restarting", "Theme changes were applied. The app will restart now.")
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
 
     def get_shortcut_action_rows(self) -> list[ShortcutActionRow]:
         rows: list[ShortcutActionRow] = []
@@ -5361,12 +5615,9 @@ class MiscMixin:
         marker_id = tab.bookmark_marker_id
         if marker_id is not None:
             return marker_id
-        try:
-            from PySide6.Qsci import QsciScintilla
-        except Exception:
-            return None
         if hasattr(tab.text_edit.widget, "markerDefine"):
-            marker_id = tab.text_edit.widget.markerDefine(QsciScintilla.RightArrow)
+            marker_symbol = getattr(tab.text_edit.widget, "RightArrow", 2)
+            marker_id = tab.text_edit.widget.markerDefine(marker_symbol)
             tab.text_edit.widget.setMarkerBackgroundColor(QColor("#ffcc00"), marker_id)
             tab.bookmark_marker_id = marker_id
             return marker_id
@@ -5406,7 +5657,7 @@ class MiscMixin:
         return colors.get(style_id, QColor("#9fd3a8"))
 
     def _apply_line_styles(self, tab: EditorTab) -> None:
-        if tab.text_edit.is_scintilla:
+        if tab.text_edit.is_native_scintilla:
             return
         styled = self._tab_style_lines(tab)
         if not styled:
@@ -5677,6 +5928,13 @@ class MiscMixin:
         self.workspace_tree.setHeaderHidden(False)
         self.workspace_tree.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.workspace_tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.workspace_tree.setDragEnabled(True)
+        self.workspace_tree.setAcceptDrops(True)
+        self.workspace_tree.setDropIndicatorShown(True)
+        self.workspace_tree.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
+        self.workspace_tree.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.workspace_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.workspace_tree.customContextMenuRequested.connect(self._on_workspace_tree_context_menu)
         self.workspace_model = QFileSystemModel(self.workspace_tree)
         self.workspace_model.setRootPath("")
         self.workspace_tree.setModel(self.workspace_model)
@@ -5699,7 +5957,7 @@ class MiscMixin:
             self.workspace_path_label.setText("No workspace selected")
             self.workspace_tree.setRootIndex(self.workspace_model.index(""))
             return
-        self.workspace_path_label.setText(root)
+        self.workspace_path_label.setText(f"{root}{self._workspace_git_status_suffix(root)}")
         self.workspace_model.setRootPath(root)
         self.workspace_tree.setRootIndex(self.workspace_model.index(root))
         for col in range(1, self.workspace_model.columnCount()):
@@ -5711,6 +5969,143 @@ class MiscMixin:
         path = self.workspace_model.filePath(index)
         if path and Path(path).is_file():
             self._open_file_path(path)
+
+    def _workspace_git_status_suffix(self, root: str) -> str:
+        try:
+            cp = subprocess.run(
+                ["git", "-C", root, "status", "--porcelain"],
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+                check=False,
+            )
+            if cp.returncode != 0:
+                return ""
+            added = modified = deleted = untracked = 0
+            for raw in cp.stdout.splitlines():
+                code = raw[:2]
+                if "A" in code:
+                    added += 1
+                if "M" in code:
+                    modified += 1
+                if "D" in code:
+                    deleted += 1
+                if code == "??":
+                    untracked += 1
+            total = added + modified + deleted + untracked
+            if total <= 0:
+                return " [git: clean]"
+            return f" [git: +{added} ~{modified} -{deleted} ?{untracked}]"
+        except Exception:
+            return ""
+
+    def _workspace_tree_path_from_index(self, index) -> str:
+        if not hasattr(self, "workspace_model"):
+            return ""
+        try:
+            return str(self.workspace_model.filePath(index) or "")
+        except Exception:
+            return ""
+
+    def _on_workspace_tree_context_menu(self, pos: QPoint) -> None:
+        if not hasattr(self, "workspace_tree"):
+            return
+        index = self.workspace_tree.indexAt(pos)
+        selected_path = self._workspace_tree_path_from_index(index)
+        workspace_root = str(self.settings.get("workspace_root", "") or "").strip()
+        if not workspace_root:
+            return
+        if not selected_path:
+            selected_path = workspace_root
+        selected = Path(selected_path)
+        target_dir = selected if selected.is_dir() else selected.parent
+
+        menu = QMenu(self)
+        new_file_action = menu.addAction("New File...")
+        new_folder_action = menu.addAction("New Folder...")
+        rename_action = menu.addAction("Rename...")
+        delete_action = menu.addAction("Delete")
+        menu.addSeparator()
+        copy_path_action = menu.addAction("Copy Path")
+        open_explorer_action = menu.addAction("Open in Explorer")
+        refresh_action = menu.addAction("Refresh")
+        rename_action.setEnabled(selected.exists())
+        delete_action.setEnabled(selected.exists() and selected != Path(workspace_root))
+        copy_path_action.setEnabled(selected.exists())
+        open_explorer_action.setEnabled(selected.exists())
+
+        chosen = menu.exec(self.workspace_tree.viewport().mapToGlobal(pos))
+        if chosen is None:
+            return
+        if chosen == new_file_action:
+            name, ok = QInputDialog.getText(self, "New File", "File name:", text="new_file.txt")
+            if not ok or not name.strip():
+                return
+            path = target_dir / name.strip()
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.touch(exist_ok=False)
+            except Exception as exc:
+                QMessageBox.warning(self, "Workspace", f"Could not create file:\n{exc}")
+                return
+            self._refresh_workspace_dock()
+            self._open_file_path(str(path))
+            return
+        if chosen == new_folder_action:
+            name, ok = QInputDialog.getText(self, "New Folder", "Folder name:", text="new_folder")
+            if not ok or not name.strip():
+                return
+            path = target_dir / name.strip()
+            try:
+                path.mkdir(parents=True, exist_ok=False)
+            except Exception as exc:
+                QMessageBox.warning(self, "Workspace", f"Could not create folder:\n{exc}")
+                return
+            self._refresh_workspace_dock()
+            return
+        if chosen == rename_action:
+            old_name = selected.name
+            name, ok = QInputDialog.getText(self, "Rename", "New name:", text=old_name)
+            if not ok or not name.strip() or name.strip() == old_name:
+                return
+            new_path = selected.parent / name.strip()
+            try:
+                selected.rename(new_path)
+            except Exception as exc:
+                QMessageBox.warning(self, "Workspace", f"Could not rename:\n{exc}")
+                return
+            self._refresh_workspace_dock()
+            return
+        if chosen == delete_action:
+            ret = QMessageBox.question(
+                self,
+                "Delete",
+                f"Delete '{selected.name}'?",
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if ret != QMessageBox.Yes:
+                return
+            try:
+                if selected.is_dir():
+                    shutil.rmtree(selected)
+                else:
+                    selected.unlink(missing_ok=True)
+            except Exception as exc:
+                QMessageBox.warning(self, "Workspace", f"Could not delete:\n{exc}")
+                return
+            self._refresh_workspace_dock()
+            return
+        if chosen == copy_path_action:
+            QApplication.clipboard().setText(str(selected))
+            return
+        if chosen == open_explorer_action:
+            try:
+                os.startfile(str(selected if selected.is_dir() else selected.parent))
+            except Exception as exc:
+                QMessageBox.warning(self, "Workspace", f"Could not open location:\n{exc}")
+            return
+        if chosen == refresh_action:
+            self._refresh_workspace_dock()
 
     def _build_search_results_dock(self) -> None:
         if hasattr(self, "search_results_dock"):
@@ -5724,9 +6119,21 @@ class MiscMixin:
         layout.setContentsMargins(6, 6, 6, 6)
         self.search_results_label = QLabel("No search results", container)
         layout.addWidget(self.search_results_label)
+        filter_row = QHBoxLayout()
+        self.search_results_filter_edit = QLineEdit(container)
+        self.search_results_filter_edit.setPlaceholderText("Filter results text/path...")
+        self.search_results_filter_case_checkbox = QCheckBox("Case", container)
+        self.search_results_replace_btn = QPushButton("Replace in Displayed...", container)
+        filter_row.addWidget(self.search_results_filter_edit, 1)
+        filter_row.addWidget(self.search_results_filter_case_checkbox)
+        filter_row.addWidget(self.search_results_replace_btn)
+        layout.addLayout(filter_row)
         self.search_results_list = QListWidget(container)
         self.search_results_list.itemDoubleClicked.connect(self._open_search_result_from_dock)
         layout.addWidget(self.search_results_list, 1)
+        self.search_results_filter_edit.textChanged.connect(self._refresh_search_results_dock)
+        self.search_results_filter_case_checkbox.toggled.connect(self._refresh_search_results_dock)
+        self.search_results_replace_btn.clicked.connect(self.replace_in_search_results)
         dock.setWidget(container)
         self.search_results_dock = dock
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, dock)
@@ -5740,13 +6147,20 @@ class MiscMixin:
         if not hasattr(self, "search_results_dock"):
             return
         items = list(getattr(self, "_search_results_items", []))
+        filtered_indices = self._filtered_search_result_indices(items)
         query = str(getattr(self, "_search_results_query", "") or "")
         if not items:
             self.search_results_label.setText("No search results")
         else:
-            self.search_results_label.setText(f"Query: {query} ({len(items)} result(s))")
+            if len(filtered_indices) == len(items):
+                self.search_results_label.setText(f"Query: {query} ({len(items)} result(s))")
+            else:
+                self.search_results_label.setText(
+                    f"Query: {query} ({len(filtered_indices)}/{len(items)} filtered)"
+                )
         self.search_results_list.clear()
-        for idx, item in enumerate(items):
+        for idx in filtered_indices:
+            item = items[idx]
             path = Path(str(item.get("path", "") or ""))
             line_no = int(item.get("line_no", 1) or 1)
             line_text = str(item.get("line_text", "") or "").strip()
@@ -5755,6 +6169,28 @@ class MiscMixin:
             lw_item.setToolTip(str(path))
             lw_item.setData(Qt.UserRole, idx)
 
+    def _filtered_search_result_indices(self, items: list[dict[str, object]]) -> list[int]:
+        text = ""
+        if hasattr(self, "search_results_filter_edit"):
+            text = self.search_results_filter_edit.text().strip()
+        if not text:
+            return list(range(len(items)))
+        case_sensitive = bool(
+            hasattr(self, "search_results_filter_case_checkbox")
+            and self.search_results_filter_case_checkbox.isChecked()
+        )
+        needle = text if case_sensitive else text.lower()
+        out: list[int] = []
+        for idx, item in enumerate(items):
+            path = str(item.get("path", "") or "")
+            line_text = str(item.get("line_text", "") or "")
+            hay = f"{path} {line_text}"
+            if not case_sensitive:
+                hay = hay.lower()
+            if needle in hay:
+                out.append(idx)
+        return out
+
     def _open_search_result_from_dock(self, item: QListWidgetItem) -> None:
         idx = item.data(Qt.UserRole)
         items = list(getattr(self, "_search_results_items", []))
@@ -5762,6 +6198,113 @@ class MiscMixin:
             return
         self._search_results_index = idx
         self._open_search_result(items[idx])
+
+    def replace_in_search_results(self) -> None:
+        items = list(getattr(self, "_search_results_items", []))
+        if not items:
+            QMessageBox.information(self, "Replace in Results", "No search results available.")
+            return
+        target_indices = self._filtered_search_result_indices(items)
+        if not target_indices:
+            QMessageBox.information(self, "Replace in Results", "No displayed results to replace.")
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Replace in Displayed Results")
+        apply_dialog_theme_from_window(self, dialog)
+        layout = QFormLayout(dialog)
+        find_edit = QLineEdit(dialog)
+        replace_edit = QLineEdit(dialog)
+        regex_checkbox = QCheckBox("Use regex", dialog)
+        case_checkbox = QCheckBox("Case sensitive", dialog)
+        whole_word_checkbox = QCheckBox("Whole word", dialog)
+        find_edit.setText(str(getattr(self, "_search_results_query", "") or ""))
+        layout.addRow("Find what:", find_edit)
+        layout.addRow("Replace with:", replace_edit)
+        layout.addRow("", regex_checkbox)
+        layout.addRow("", case_checkbox)
+        layout.addRow("", whole_word_checkbox)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, Qt.Horizontal, dialog)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        find_text = find_edit.text()
+        replace_text = replace_edit.text()
+        if not find_text:
+            return
+        use_regex = regex_checkbox.isChecked()
+        case_sensitive = case_checkbox.isChecked()
+        whole_word = whole_word_checkbox.isChecked()
+        flags = 0 if case_sensitive else re.IGNORECASE
+        pattern_text = find_text if use_regex else re.escape(find_text)
+        if whole_word:
+            pattern_text = r"\b" + pattern_text + r"\b"
+        try:
+            pattern = re.compile(pattern_text, flags)
+        except re.error as exc:
+            QMessageBox.warning(self, "Replace in Results", f"Invalid regular expression:\n{exc}")
+            return
+
+        line_map: dict[str, set[int]] = {}
+        for idx in target_indices:
+            row = items[idx]
+            path = str(row.get("path", "") or "")
+            line_no = int(row.get("line_no", 1) or 1)
+            if not path:
+                continue
+            line_map.setdefault(path, set()).add(max(1, line_no))
+
+        enc_map = self.settings.get("file_encodings", {})
+        open_tabs: dict[str, EditorTab] = {}
+        for tab_idx in range(self.tab_widget.count()):
+            tab = self.tab_widget.widget(tab_idx)
+            if isinstance(tab, EditorTab) and tab.current_file:
+                open_tabs[tab.current_file] = tab
+
+        files_changed = 0
+        replacements = 0
+        failures = 0
+        for path, lines_set in line_map.items():
+            encoding = "utf-8"
+            if isinstance(enc_map, dict):
+                encoding = str(enc_map.get(path, "utf-8") or "utf-8")
+            try:
+                original = Path(path).read_text(encoding=encoding, errors="replace")
+            except Exception:
+                failures += 1
+                continue
+            rows = original.splitlines(keepends=True)
+            file_changes = 0
+            for line_no in sorted(lines_set):
+                line_idx = line_no - 1
+                if line_idx < 0 or line_idx >= len(rows):
+                    continue
+                updated, count = pattern.subn(replace_text, rows[line_idx])
+                if count:
+                    rows[line_idx] = updated
+                    file_changes += count
+            if not file_changes:
+                continue
+            try:
+                Path(path).write_text("".join(rows), encoding=encoding, errors="replace")
+            except Exception:
+                failures += 1
+                continue
+            files_changed += 1
+            replacements += file_changes
+            tab = open_tabs.get(path)
+            if tab is not None and not tab.text_edit.is_modified():
+                self.reload_tab_from_disk(tab)
+
+        self.show_status_message(
+            f"Replace in results: {replacements} replacement(s) across {files_changed} file(s).",
+            3500,
+        )
+        if failures:
+            QMessageBox.warning(self, "Replace in Results", f"Completed with {failures} file error(s).")
 
     def _build_status_panel_dock(self) -> None:
         if hasattr(self, "status_panel_dock"):
@@ -7058,7 +7601,7 @@ class SettingsDialog(QDialog):
         lang_group = QGroupBox("Language \U0001F310", container)
         lang_layout = QFormLayout(lang_group)
         self.lang_combo = QComboBox(lang_group)
-        self.lang_combo.addItems(["English", "EspaÃƒÂ±ol", "Deutsch", "FranÃƒÂ§ais"])
+        self.lang_combo.addItems(["English", "EspaÃ±ol", "Deutsch", "FranÃ§ais"])
         current_lang = self._settings.get("language", "English")
         idx = self.lang_combo.findText(current_lang)
         if idx >= 0:
@@ -7424,4 +7967,5 @@ class SettingsDialog(QDialog):
             return
         self.reset_to_defaults_requested = True
         self.accept()
+
 

@@ -86,6 +86,13 @@ AI chat link rendering behavior:
 
 Core editor capabilities (high-level):
 - Multi-tab editing with detachable tabs/windows.
+- PySide6-native Scintilla-compat editor backend is available when `PySide6.Qsci` is unavailable.
+- Scintilla-compat backend supports:
+  - multi-caret and rectangular/column workflows
+  - fold/marker/number margins and bookmark-style markers
+  - indicator/hotspot ranges with hover/click interactions
+  - auto-completion and lexer-style token overlays
+  - symbol overlays (space/tab, EOL, control chars, indent guides, wrap)
 - Pin tabs, favorite tabs/files, tab colors, tags, and file metadata.
 - Read-only state handling and toggle actions.
 - Search/replace, regex workflows, bookmarks, line operations.
@@ -180,6 +187,7 @@ Troubleshooting map:
 - Tab appearance/badge overlap: check tab accessory sizing, tab text spacing, and `QTabBar` style rules.
 - Save/favorite/pin metadata issue: check save/save-as flow and file metadata persistence helpers.
 - AI chat parsing/deep-link issue: check chat parsing/normalization logic and settings route aliases.
+- Preferences Appearance contrast/race issue: inspect `SettingsThemeProbe` logs from `pypad.ui.main_window.settings_dialog` at `open`, `first_paint`, `post_150ms`, and `post_600ms`; compare token values (`dark_mode`, `text`, `surface_bg`, `input_bg`) with effective host/scroll/viewport/body palettes to detect theme/palette override mismatches.
 
 How to answer users effectively in PyPad:
 - For "where is X?": give menu path, optional `pypad://` deep link, and shortcut if known.

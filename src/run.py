@@ -13,12 +13,6 @@ from PySide6.QtCore import QObject, QEvent, Qt, QTimer, qInstallMessageHandler, 
 
 _MAIN_WINDOW = None
 
-# --- Handle paths for PyInstaller ---
-APP_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
-
-def resource_path(relative_path: str) -> str:
-    return str(APP_ROOT / relative_path)
-
 # --- Add ROOT for imports ---
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
@@ -27,6 +21,7 @@ if str(ROOT) not in sys.path:
 from pypad.app import main
 from pypad.app_settings import get_crash_logs_file_path
 from pypad.logging_utils import configure_app_logging, get_logger
+from pypad.ui.theme.asset_paths import resolve_asset_path
 
 configure_app_logging("INFO")
 LOGGER = get_logger(__name__)
@@ -193,7 +188,10 @@ if __name__ == "__main__":
     app.setQuitOnLastWindowClosed(True)
 
     # Load splash image
-    splash_path = resource_path("assets/splash.png")
+    splash_asset = resolve_asset_path("splash.png")
+    splash_path = str(splash_asset) if splash_asset is not None else ""
+    if splash_asset is None:
+        LOGGER.warning("Splash image asset not found: splash.png")
     pixmap = QPixmap(splash_path)
     LOGGER.debug("Loaded splash pixmap from %s", splash_path)
     pixmap = pixmap.scaled(
@@ -204,7 +202,8 @@ if __name__ == "__main__":
     )
 
     # Load version text
-    version_file = resource_path("assets/version.txt")
+    version_asset = resolve_asset_path("version.txt")
+    version_file = str(version_asset) if version_asset is not None else ""
     try:
         with open(version_file, "r", encoding="utf-8") as f:
             version = f.read().strip()
@@ -215,7 +214,10 @@ if __name__ == "__main__":
     _startup_log("Waiting for main_window to start...")
 
     # Load custom font
-    font_path = resource_path("assets/splash.ttf")
+    font_asset = resolve_asset_path("splash.ttf")
+    font_path = str(font_asset) if font_asset is not None else ""
+    if font_asset is None:
+        LOGGER.warning("Splash font asset not found: splash.ttf")
     font_id = QFontDatabase.addApplicationFont(font_path)
     LOGGER.debug("Splash font load attempted from %s (font_id=%s)", font_path, font_id)
 

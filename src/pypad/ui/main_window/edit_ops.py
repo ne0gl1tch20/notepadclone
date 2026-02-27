@@ -63,20 +63,20 @@ from PySide6.QtWidgets import (
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtPrintSupport import QPrintDialog, QPrintPreviewDialog, QPrinter
 
-from ..debug_logs_dialog import DebugLogsDialog
-from ..detachable_tab_bar import DetachableTabBar
-from ..editor_tab import EditorTab
-from ..ai_controller import AIController
-from ..asset_paths import resolve_asset_path
-from ..autosave import AutoSaveRecoveryDialog, AutoSaveStore
-from ..reminders import ReminderStore, RemindersDialog
-from ..security_controller import SecurityController
-from ..syntax_highlighter import CodeSyntaxHighlighter
-from ..updater_controller import UpdaterController
-from ..version_history import VersionHistoryDialog
-from ..workspace_controller import WorkspaceController
-from ..advanced_text_tools import compute_regex_filtered_replacement
-from ..document_fidelity import clipboard_paste_special_options, convert_clipboard_for_paste
+from pypad.ui.debug.debug_logs_dialog import DebugLogsDialog
+from pypad.ui.editor.detachable_tab_bar import DetachableTabBar
+from pypad.ui.editor.editor_tab import EditorTab
+from pypad.ui.ai.ai_controller import AIController
+from pypad.ui.theme.asset_paths import resolve_asset_path
+from pypad.ui.system.autosave import AutoSaveRecoveryDialog, AutoSaveStore
+from pypad.ui.system.reminders import ReminderStore, RemindersDialog
+from pypad.ui.security.security_controller import SecurityController
+from pypad.ui.editor.syntax_highlighter import CodeSyntaxHighlighter
+from pypad.ui.system.updater_controller import UpdaterController
+from pypad.ui.system.version_history import VersionHistoryDialog
+from pypad.ui.workspace.workspace_controller import WorkspaceController
+from pypad.ui.editor.advanced_text_tools import compute_regex_filtered_replacement
+from pypad.ui.document.document_fidelity import clipboard_paste_special_options, convert_clipboard_for_paste
 
 
 
@@ -578,14 +578,14 @@ class EditOpsMixin:
     def _clear_search_highlights(self) -> None:
         tab = self.active_tab()
         if tab is not None:
-            if not tab.text_edit.is_scintilla:
+            if not tab.text_edit.is_native_scintilla:
                 tab.text_edit.widget.setExtraSelections([])
 
     def _apply_search_highlights(self, query: str) -> None:
         tab = self.active_tab()
         if tab is None:
             return
-        if tab.text_edit.is_scintilla:
+        if tab.text_edit.is_native_scintilla:
             return
         flags = QTextDocument.FindFlag()
         if self.search_case_checkbox.isChecked():
@@ -602,4 +602,5 @@ class EditOpsMixin:
             selections.append(selection)
             cursor = doc.find(query, cursor, flags)
         tab.text_edit.widget.setExtraSelections(selections)
+
 

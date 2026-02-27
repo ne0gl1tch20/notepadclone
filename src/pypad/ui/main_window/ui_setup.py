@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 import getpass
 import base64
 import hashlib
@@ -66,20 +66,20 @@ from PySide6.QtWidgets import (
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtPrintSupport import QPrintDialog, QPrintPreviewDialog, QPrinter
 
-from ..debug_logs_dialog import DebugLogsDialog
-from ..detachable_tab_bar import DetachableTabBar
-from ..editor_tab import EditorTab
+from pypad.ui.debug.debug_logs_dialog import DebugLogsDialog
+from pypad.ui.editor.detachable_tab_bar import DetachableTabBar
+from pypad.ui.editor.editor_tab import EditorTab
 from ...app_settings import build_default_settings
-from ..ai_controller import AIController
-from ..asset_paths import resolve_asset_path
-from ..autosave import AutoSaveRecoveryDialog, AutoSaveStore
-from ..reminders import ReminderStore, RemindersDialog
-from ..security_controller import SecurityController
-from ..syntax_highlighter import CodeSyntaxHighlighter
-from ..updater_controller import UpdaterController
-from ..version_history import LocalHistoryTimelineDialog, VersionHistoryDialog
-from ..workspace_controller import WorkspaceController
-from ...logging_utils import (
+from pypad.ui.ai.ai_controller import AIController
+from pypad.ui.theme.asset_paths import resolve_asset_path
+from pypad.ui.system.autosave import AutoSaveRecoveryDialog, AutoSaveStore
+from pypad.ui.system.reminders import ReminderStore, RemindersDialog
+from pypad.ui.security.security_controller import SecurityController
+from pypad.ui.editor.syntax_highlighter import CodeSyntaxHighlighter
+from pypad.ui.system.updater_controller import UpdaterController
+from pypad.ui.system.version_history import LocalHistoryTimelineDialog, VersionHistoryDialog
+from pypad.ui.workspace.workspace_controller import WorkspaceController
+from pypad.logging_utils import (
     clear_console_log_lines,
     configure_app_logging,
     get_console_log_lines,
@@ -87,6 +87,8 @@ from ...logging_utils import (
     get_logger,
     normalize_log_level_name,
 )
+from pypad.app_settings.scintilla_profile import ScintillaProfile
+from pypad.ui.theme.theme_tokens import build_tokens_from_settings
 from .notepadpp_pref_runtime import apply_indentation_defaults_to_tab, new_document_defaults
 
 
@@ -652,16 +654,26 @@ class UiSetupMixin:
             return
         if tab.large_file:
             return
-        if tab.text_edit.is_scintilla:
+        if tab.text_edit.is_native_scintilla:
             tab.syntax_highlighter = None
             return
+        profile = ScintillaProfile.from_settings(self.settings)
         language = self._detect_language_for_tab(tab)
         if tab.syntax_highlighter is None:
             tab.syntax_highlighter = cast(
                 Any,
-                CodeSyntaxHighlighter(tab.text_edit.widget.document(), language=language),
+                CodeSyntaxHighlighter(
+                    tab.text_edit.widget.document(),
+                    language=language,
+                    style_theme=profile.style_theme,
+                    style_overrides=profile.style_overrides,
+                ),
             )
         else:
+            tab.syntax_highlighter.set_style_profile(
+                style_theme=profile.style_theme,
+                style_overrides=profile.style_overrides,
+            )
             tab.syntax_highlighter.set_language(language)
 
     def _apply_focus_mode(self, enabled: bool) -> None:
@@ -926,14 +938,28 @@ class UiSetupMixin:
 
     def add_new_tab(self, text: str = "", file_path: str | None = None, make_current: bool = True) -> EditorTab:
         tab = EditorTab(self)
+        profile = ScintillaProfile.from_settings(self.settings)
+        tokens = build_tokens_from_settings(self.settings)
         self._connect_tab_signals(tab)
-        tab.text_edit.set_wrap_enabled(self.word_wrap_enabled)
+        tab.text_edit.set_wrap_enabled(profile.wrap_mode == "word")
+        tab.show_line_numbers = bool(profile.line_numbers_visible)
+        tab.text_edit.set_line_numbers_visible(tab.show_line_numbers)
         font = QFont()
         font.setPointSize(self.settings.get("font_size", 11))
         font_family = self.settings.get("font_family")
         if font_family:
             font.setFamily(font_family)
         tab.text_edit.set_font(font)
+        if hasattr(tab.text_edit, "set_theme_colors"):
+            tab.text_edit.set_theme_colors(
+                background=tokens.editor_bg,
+                foreground=tokens.text,
+                selection_bg=tokens.selection_bg,
+                selection_fg=tokens.selection_fg,
+                caret_line_bg=tokens.tab_hover_bg,
+                gutter_bg=tokens.chrome_bg,
+                gutter_fg=tokens.text_muted,
+            )
         tab.text_edit.set_text(text)
         tab.current_file = file_path
         if not file_path:
@@ -953,21 +979,22 @@ class UiSetupMixin:
         tab.markdown_mode_enabled = self._is_markdown_path(file_path)
         tab.track_changes_enabled = bool(self.settings.get("track_changes_enabled", False))
         tab.markdown_preview.setVisible(tab.markdown_mode_enabled)
-        tab.column_mode = bool(getattr(self, "column_mode_action", None) and self.column_mode_action.isChecked())
-        tab.multi_caret = bool(getattr(self, "multi_caret_action", None) and self.multi_caret_action.isChecked())
-        tab.code_folding = bool(getattr(self, "code_folding_action", None) is None or self.code_folding_action.isChecked())
-        tab.auto_completion_mode = str(self.settings.get("auto_completion_mode", "all") or "all").lower()
-        tab.show_space_tab = bool(self.settings.get("show_symbol_space_tab", False))
-        tab.show_eol = bool(self.settings.get("show_symbol_eol", False))
-        tab.show_non_printing = bool(self.settings.get("show_symbol_non_printing", False))
-        tab.show_control_chars = bool(self.settings.get("show_symbol_control_chars", False))
-        tab.show_all_chars = bool(self.settings.get("show_symbol_all_chars", False))
-        tab.show_indent_guides = bool(self.settings.get("show_symbol_indent_guide", True))
-        tab.show_wrap_symbol = bool(self.settings.get("show_symbol_wrap_symbol", False))
+        tab.column_mode = bool(profile.column_mode)
+        tab.multi_caret = bool(profile.multi_caret)
+        tab.code_folding = bool(profile.code_folding)
+        tab.auto_completion_mode = str(profile.auto_completion_mode or "all").lower()
+        tab.show_space_tab = bool(profile.show_space_tab)
+        tab.show_eol = bool(profile.show_eol)
+        tab.show_non_printing = bool(profile.show_non_printing)
+        tab.show_control_chars = bool(profile.show_control_chars)
+        tab.show_all_chars = bool(profile.show_all_chars)
+        tab.show_indent_guides = bool(profile.show_indent_guides)
+        tab.show_wrap_symbol = bool(profile.show_wrap_symbol)
         if hasattr(self, "_ensure_tab_autosave_meta"):
             self._ensure_tab_autosave_meta(tab)
         if hasattr(self, "_apply_scintilla_modes"):
             self._apply_scintilla_modes(tab)
+        tab.text_edit.configure_indentation(tab_width=profile.tab_width, use_tabs=profile.use_tabs)
         apply_indentation_defaults_to_tab(self, tab)
 
         index = self.tab_widget.addTab(tab, self._tab_display_name(tab))
@@ -1024,6 +1051,10 @@ class UiSetupMixin:
             self.code_folding_action.blockSignals(True)
             self.code_folding_action.setChecked(tab.code_folding)
             self.code_folding_action.blockSignals(False)
+        if hasattr(self, "show_line_numbers_action"):
+            self.show_line_numbers_action.blockSignals(True)
+            self.show_line_numbers_action.setChecked(bool(getattr(tab, "show_line_numbers", True)))
+            self.show_line_numbers_action.blockSignals(False)
         if hasattr(self, "auto_completion_group"):
             mode = (tab.auto_completion_mode or "all").lower()
             if mode in {"none", "off"}:
@@ -2086,6 +2117,14 @@ class UiSetupMixin:
         self.workspace_files_action.triggered.connect(self.show_workspace_files)
         self.workspace_search_action = QAction("Search Workspace...", self)
         self.workspace_search_action.triggered.connect(self.search_workspace)
+        self.workspace_save_profile_action = QAction("Save Current Workspace as Profile...", self)
+        self.workspace_save_profile_action.triggered.connect(self.save_workspace_profile)
+        self.workspace_load_profile_action = QAction("Load Workspace Profile...", self)
+        self.workspace_load_profile_action.triggered.connect(self.load_workspace_profile)
+        self.workspace_startup_picker_action = QAction("Show Workspace Profile Picker on Startup", self)
+        self.workspace_startup_picker_action.setCheckable(True)
+        self.workspace_startup_picker_action.setChecked(bool(self.settings.get("workspace_startup_picker_enabled", False)))
+        self.workspace_startup_picker_action.toggled.connect(self.toggle_workspace_startup_picker)
 
         self.encrypt_note_action = QAction("Enable Note Encryption...", self)
         self.encrypt_note_action.triggered.connect(self.enable_note_encryption)
@@ -2694,6 +2733,11 @@ class UiSetupMixin:
         self.status_bar_action.setCheckable(True)
         self.status_bar_action.setChecked(True)
         self.status_bar_action.triggered.connect(self.toggle_status_bar)
+        self.show_line_numbers_action = QAction("Show Line Number", self)
+        self.show_line_numbers_action.setCheckable(True)
+        self.show_line_numbers_action.setShortcut(QKeySequence("Alt+L"))
+        self.show_line_numbers_action.setChecked(bool(self.settings.get("npp_margin_line_numbers_enabled", True)))
+        self.show_line_numbers_action.triggered.connect(self.toggle_show_line_numbers)
 
         self.zoom_in_action = QAction("Zoom &In", self)
         self.zoom_in_action.setShortcuts([QKeySequence("Ctrl++"), QKeySequence("Ctrl+=")])
@@ -3388,6 +3432,10 @@ class UiSetupMixin:
         self.workspace_menu.addAction(self.open_workspace_action)
         self.workspace_menu.addAction(self.workspace_files_action)
         self.workspace_menu.addAction(self.workspace_search_action)
+        self.workspace_menu.addSeparator()
+        self.workspace_menu.addAction(self.workspace_save_profile_action)
+        self.workspace_menu.addAction(self.workspace_load_profile_action)
+        self.workspace_menu.addAction(self.workspace_startup_picker_action)
         self.session_menu = self.file_menu.addMenu("Session")
         self.session_menu.addAction(self.save_session_action)
         self.session_menu.addAction(self.save_session_as_action)
@@ -3718,6 +3766,7 @@ class UiSetupMixin:
         move_clone_menu.addAction(self.split_horizontal_action)
         move_clone_menu.addAction(self.split_close_action)
         self.view_menu.addAction(self.word_wrap_action)
+        self.view_menu.addAction(self.show_line_numbers_action)
         self.view_menu.addAction(self.focus_other_view_action)
         self.view_menu.addAction(self.hide_lines_action)
         self.view_menu.addAction(self.show_hidden_lines_action)
@@ -4105,4 +4154,5 @@ class UiSetupMixin:
             if show_find_panel:
                 self.addToolBarBreak(Qt.ToolBarArea.TopToolBarArea)
                 self.addToolBar(Qt.ToolBarArea.TopToolBarArea, search_toolbar)
+
 

@@ -1,7 +1,7 @@
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 7, 4, 0),
-    prodvers=(1, 7, 4, 0),
+    filevers=(1, 7, 5, 0),
+    prodvers=(1, 7, 5, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -17,11 +17,11 @@ VSVersionInfo(
         [
         StringStruct('CompanyName', 'ne0gl1tch20'),
         StringStruct('FileDescription', 'Pypad'),
-        StringStruct('FileVersion', '1.7.4.0'),
+        StringStruct('FileVersion', '1.7.5.0'),
         StringStruct('InternalName', 'pypad'),
         StringStruct('OriginalFilename', 'run.exe'),
         StringStruct('ProductName', 'Pypad'),
-        StringStruct('ProductVersion', '1.7.4.0')
+        StringStruct('ProductVersion', '1.7.5.0')
         ])
       ]),
     VarFileInfo([VarStruct('Translation', [0x0409, 1200])])

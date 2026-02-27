@@ -62,23 +62,23 @@ from PySide6.QtWidgets import (
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtPrintSupport import QPrintDialog, QPrintPreviewDialog, QPrinter
 
-from ..debug_logs_dialog import DebugLogsDialog
-from ..detachable_tab_bar import DetachableTabBar
-from ..editor_tab import EditorTab
-from ..ai_controller import AIController
-from ..asset_paths import resolve_asset_path
-from ..autosave import AutoSaveRecoveryDialog, AutoSaveStore
-from ..reminders import ReminderStore, RemindersDialog
-from ..security_controller import SecurityController
-from ..syntax_highlighter import CodeSyntaxHighlighter
-from ..updater_controller import UpdaterController
-from ..version_history import VersionHistoryDialog
-from ..workspace_controller import WorkspaceController
-from ..document_authoring import PageLayoutConfig, build_layout_html
-from ..project_workflow import read_text_with_large_file_preview
-from ..document_fidelity import DocumentFidelityError, export_document_text, import_document_text
-from ..note_crypto import HEADER as ENCRYPTED_NOTE_HEADER
-from ...logging_utils import get_logger
+from pypad.ui.debug.debug_logs_dialog import DebugLogsDialog
+from pypad.ui.editor.detachable_tab_bar import DetachableTabBar
+from pypad.ui.editor.editor_tab import EditorTab
+from pypad.ui.ai.ai_controller import AIController
+from pypad.ui.theme.asset_paths import resolve_asset_path
+from pypad.ui.system.autosave import AutoSaveRecoveryDialog, AutoSaveStore
+from pypad.ui.system.reminders import ReminderStore, RemindersDialog
+from pypad.ui.security.security_controller import SecurityController
+from pypad.ui.editor.syntax_highlighter import CodeSyntaxHighlighter
+from pypad.ui.system.updater_controller import UpdaterController
+from pypad.ui.system.version_history import VersionHistoryDialog
+from pypad.ui.workspace.workspace_controller import WorkspaceController
+from pypad.ui.document.document_authoring import PageLayoutConfig, build_layout_html
+from pypad.ui.workspace.project_workflow import read_text_with_large_file_preview
+from pypad.ui.document.document_fidelity import DocumentFidelityError, export_document_text, import_document_text
+from pypad.ui.security.note_crypto import HEADER as ENCRYPTED_NOTE_HEADER
+from pypad.logging_utils import get_logger
 from .notepadpp_pref_runtime import apply_npp_print_preferences_to_page_layout
 
 _LOGGER = get_logger(__name__)
@@ -591,4 +591,5 @@ class FileOpsMixin:
             self._persist_eol_for_path(tab.current_file, mode)
         self.update_status_bar()
         self.show_status_message(f"EOL mode set to {mode}", 3000)
+
 

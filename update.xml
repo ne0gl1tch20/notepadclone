@@ -1,23 +1,21 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <updates>
   <item>
-    <title>PyPad 1.7.4-prerelease</title>
-    <version>1.7.4</version>
-    <pubDate>2026-02-26</pubDate>
+    <title>PyPad 1.7.5-prerelease</title>
+    <version>1.7.5</version>
+    <pubDate>2026-02-27</pubDate>
     <description>
-      - Soft modern rounded UI overhaul across core chrome (tabs, toolbars, menus, docks, status bar, scrollbars)
-      - Shared token-based theming now powers main UI, dialogs, Quick Open, AI Chat, and more utility panels
-      - Quick Open / Go to Anything expanded with symbols, workspace symbols, background indexing/cache, grouping, and live refresh
-      - AI chat productivity upgrades: one-click apply actions, diff preview flow, whole-file replace actions, and safer insert-offer parsing
-      - Dialog theming expanded across Settings, Tutorial, Autosave, Workspace dialogs, AI edit preview, Debug Logs, and updater dialogs
-      - Added visual UI regression tooling (screenshot smoke tests, HTML manifest, baseline compare/update mode, CI gate)
-      - Split UI CI checks into fast, runtime-smoke, and visual-smoke workflows for faster feedback
-      - Fixed tab-close hover-mode theming/runtime regressions discovered by new smoke tests
+      - Hardened LSP go-to-definition client with timeout controls, retries, and optional verbose logging
+      - Added server preference settings in UI for Python/JavaScript/TypeScript language servers
+      - Improved Windows command parsing for quoted language-server paths with spaces
+      - Added confirmed factory-reset option in Preferences (reset defaults and close app)
+      - Added PySide6-native Scintilla compatibility engine for advanced editor fallback without PyQt/Qsci import switching
+      - Expanded compatibility editor with folding, multi-caret/column editing, indicators/hotspots, and margin marker APIs
       - Detailed changelog: CHANGELOG.md
     </description>
     <sha256>0000000000000000000000000000000000000000000000000000000000000000</sha256>
     <enclosure
-      url="https://github.com/ne0gl1tch20/pypad/raw/refs/heads/main/dist/installer/PyPad-Setup-1.7.4-prerelease.exe"
+      url="https://github.com/ne0gl1tch20/pypad/raw/refs/heads/main/dist/installer/PyPad-Setup-1.7.5-prerelease.exe"
       type="application/octet-stream" />
   </item>
 </updates>

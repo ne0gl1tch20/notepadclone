@@ -1,15 +1,21 @@
 ﻿# Pypad - App Summary
 
-Last updated: 2026-02-26
-Release target: `1.7.4-prerelease`
+Last updated: 2026-02-27
+Release target: `1.7.5-prerelease`
 
 ## Product Snapshot
 
 Pypad is a PySide6 desktop editor that combines note-taking, coding/markdown workflows, workspace tools, and AI-assisted editing. The app now ships with a token-based modern rounded UI theme system applied across the main chrome and most dialogs/panels.
 
+Current release focus:
+- Hardened LSP go-to-definition pipeline (timeouts/retries/verbose logs and per-language server preference settings in UI)
+- Added confirmed factory-reset action in Settings
+- QScintilla-style PySide6 compatibility editor engine with advanced fallback behavior
+
 ## Major Capabilities
 
 - Multi-tab editing with detachable tabs, pin/favorite/read-only states, tags, and per-tab metadata
+- QScintilla-like editor experience in PySide6-only environments (without switching to PyQt imports)
 - Markdown formatting tools and live preview
 - Workspace files/search dialogs and search result navigation
 - Autosave, crash recovery, and version history with diff preview
@@ -47,6 +53,7 @@ Mixins:
 - `src/pypad/ui/main_window/misc.py`
 
 Core UI modules:
+- `src/pypad/ui/editor/scintilla_compat.py`
 - `src/pypad/ui/theme_tokens.py`
 - `src/pypad/ui/dialog_theme.py`
 - `src/pypad/ui/quick_open_dialog.py`
@@ -76,6 +83,19 @@ Visual smoke + baseline compare:
 
 Local wrapper:
 - `scripts/run_ui_checks.ps1`
+
+## Scintilla Compatibility Status
+
+Implemented in `src/pypad/ui/editor/scintilla_compat.py`:
+- Margin system with fold/marker/number rendering and margin-click signaling by index
+- Marker symbol families and margin marker-mask support
+- Column mode with persistent rectangular block editing
+- Multi-caret typing/editing/navigation synchronization
+- Folding (indent + bracket-guided) with fold-all/line/level operations
+- Indicator and hotspot ranges with hover/click interactions
+- Calltip/annotation helpers and brace matching
+- Auto-completion (document/API/all modes, threshold, Ctrl+Space)
+- Lightweight lexer-style token overlays and style API hooks
 
 ## Release Metadata Files
 

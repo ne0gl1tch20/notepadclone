@@ -8,18 +8,32 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from pypad.ui.theme_tokens import (
-    build_ai_edit_preview_dialog_qss,
-    build_autosave_dialog_qss,
-    build_debug_logs_dialog_qss,
-    build_main_window_qss,
-    build_settings_dialog_qss,
-    build_tokens_from_settings,
-    build_tutorial_dialog_qss,
-    build_workspace_dialog_qss,
-    tokens_signature,
-    tokens_to_css_vars_qss,
-)
+try:
+    from pypad.ui.theme.theme_tokens import (
+        build_ai_edit_preview_dialog_qss,
+        build_autosave_dialog_qss,
+        build_debug_logs_dialog_qss,
+        build_main_window_qss,
+        build_settings_dialog_qss,
+        build_tokens_from_settings,
+        build_tutorial_dialog_qss,
+        build_workspace_dialog_qss,
+        tokens_signature,
+        tokens_to_css_vars_qss,
+    )
+except ModuleNotFoundError:
+    from pypad.ui.theme_tokens import (
+        build_ai_edit_preview_dialog_qss,
+        build_autosave_dialog_qss,
+        build_debug_logs_dialog_qss,
+        build_main_window_qss,
+        build_settings_dialog_qss,
+        build_tokens_from_settings,
+        build_tutorial_dialog_qss,
+        build_workspace_dialog_qss,
+        tokens_signature,
+        tokens_to_css_vars_qss,
+    )
 
 
 class ThemeTokensTests(unittest.TestCase):
@@ -82,6 +96,15 @@ class ThemeTokensTests(unittest.TestCase):
         self.assertIn("QListWidget::item:selected", workspace_qss)
         self.assertIn("QSplitter::handle", ai_preview_qss)
         self.assertIn("QTextEdit", debug_logs_qss)
+
+    def test_settings_qss_enforces_page_stack_text_colors(self) -> None:
+        t = build_tokens_from_settings({"dark_mode": True, "accent_color": "#2266dd"})
+        settings_qss = build_settings_dialog_qss(t)
+        self.assertIn("QWidget#settingsPageHost,", settings_qss)
+        self.assertIn("QWidget#settingsPageScrollContent,", settings_qss)
+        self.assertIn("QWidget#settingsPageBody {", settings_qss)
+        self.assertIn("QScrollArea#settingsPageScroll {", settings_qss)
+        self.assertIn("QWidget#settingsPageHost QLabel:disabled,", settings_qss)
 
     def test_main_window_qss_contains_core_selectors_and_hover_override(self) -> None:
         t = build_tokens_from_settings({"dark_mode": False, "accent_color": "#1188dd"})
