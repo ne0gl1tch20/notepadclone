@@ -2,6 +2,9 @@
 
 Pypad is a PySide6 desktop text editor focused on fast note-taking and power-user workflows.
 
+Creator's Thoughts
+- You might wonder why my naming is like the other repos, i think i named it on my own since its a great way despite all the mess...
+
 Highlights:
 - Soft modern rounded UI overhaul with token-based theming
 - Multi-tab editor with detachable tabs, pin/favorite states, and rich tab actions
