@@ -9,6 +9,7 @@ from PySide6.QtCore import QStringListModel
 from PySide6.QtWidgets import QCompleter, QPlainTextEdit, QTextEdit, QWidget
 from PySide6.QtWidgets import QToolTip
 
+# Advanced but minified scintilla engine, tailored for PySide6
 # Scintilla Recreated from scratch using QPlainTextEdit, inspired by https://doc.qt.io/qt-6/qtwidgets-widgets-codeeditor-example.html and https://github.com/pyqtgraph/pyqtgraph
 
 @dataclass

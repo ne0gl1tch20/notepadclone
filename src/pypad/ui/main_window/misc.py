@@ -4437,6 +4437,7 @@ class MiscMixin:
                 self.autosave_status_label.setText("Autosave: off")
             return
         saved_count = 0
+        autosave_marked_saved = False
         for index in range(self.tab_widget.count()):
             tab = self.tab_widget.widget(index)
             if not isinstance(tab, EditorTab):
@@ -4460,6 +4461,8 @@ class MiscMixin:
                     original_path=tab.current_file or "",
                     title=self._tab_display_name(tab),
                 )
+                tab.text_edit.set_modified(False)
+                autosave_marked_saved = True
                 saved_count += 1
                 if hasattr(self, "_persist_tab_local_history"):
                     self._persist_tab_local_history(tab)
@@ -4471,6 +4474,10 @@ class MiscMixin:
             stamp = datetime.now().strftime("%H:%M:%S")
             if saved_count > 0:
                 self.autosave_status_label.setText(f"Autosaved at {stamp}")
+        if autosave_marked_saved:
+            self.update_action_states()
+            self.update_window_title()
+            self.update_status_bar()
 
     def _clear_tab_autosave(self, tab: EditorTab) -> None:
         if not tab.autosave_id:
@@ -5211,6 +5218,12 @@ class MiscMixin:
         return [str(Path(sys.executable).resolve()), *args]
 
     def _restart_app_after_theme_change(self) -> None:
+        self._restart_app_with_message("Theme changes were applied. The app will restart now.")
+
+    def reload_app(self) -> None:
+        self._restart_app_with_message("The app will now reload.")
+
+    def _restart_app_with_message(self, message: str) -> None:
         command = self._build_restart_command()
         popen_kwargs: dict[str, Any] = {"cwd": str(Path.cwd())}
         if os.name == "nt":
@@ -5227,11 +5240,11 @@ class MiscMixin:
             QMessageBox.critical(
                 self,
                 "Restart Failed",
-                "Theme changes require restart, but relaunch failed.\n\n"
+                "App relaunch failed.\n\n"
                 f"Command: {' '.join(command)}\nError: {exc}",
             )
             return
-        QMessageBox.information(self, "Restarting", "Theme changes were applied. The app will restart now.")
+        QMessageBox.information(self, "Restarting", message)
         app = QApplication.instance()
         if app is not None:
             app.quit()
