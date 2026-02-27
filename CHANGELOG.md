@@ -6,7 +6,13 @@ The format is based on Keep a Changelog, and this project uses Semantic Versioni
 
 ## [Unreleased]
 
+## [1.7.5-prerelease] - 2026-02-27
+
+- Another big update!!
+
 ### Added
+- Settings dialog: LSP server preference fields for Python/JavaScript/TypeScript.
+- Settings dialog: factory reset action with explicit confirmation (resets defaults and closes app).
 - PySide6-native Scintilla compatibility engine (`scintilla_compat.py`) used when `PySide6.Qsci` is unavailable.
 - Margin rendering and interactions:
   - fold glyphs, marker glyphs, line numbers
@@ -21,6 +27,15 @@ The format is based on Keep a Changelog, and this project uses Semantic Versioni
 - Richer lexer-style token overlays for Python/JS/TS/JSON/Markdown in compat mode.
 
 ### Changed
+- LSP go-to-definition client hardening:
+  - configurable initialize/request timeouts
+  - per-server retry attempts
+  - optional verbose LSP event logging
+  - server preference order respected from settings
+- Tuned default LSP settings based on smoke timings:
+  - initialize timeout: `2.5s`
+  - request timeout: `2.0s`
+  - retries: `2`
 - Editor fallback behavior no longer degrades to plain QTextEdit-only mode; advanced editor actions are routed through compatibility backend.
 - Column (rectangular) editing now persists block selection across compatible edits in column mode.
 - Multi-caret workflows improved:
@@ -33,28 +48,9 @@ The format is based on Keep a Changelog, and this project uses Semantic Versioni
 - Visual symbol toggles (`space/tab`, `EOL`, `control`, `indent guides`, `wrap`) now render in compat backend.
 
 ### Fixed
+- Windows server command parsing now handles quoted executable paths with spaces for LSP server settings.
 - Removed hard dependency on importing `PySide6.Qsci` for bookmark marker symbol setup in fallback mode.
 - Restored syntax/search/line-style overlays for compatibility backend by distinguishing native-vs-compat Scintilla handling.
-
-## [1.7.5-prerelease] - 2026-02-27
-
-### Added
-- Settings dialog: LSP server preference fields for Python/JavaScript/TypeScript.
-- Settings dialog: factory reset action with explicit confirmation (resets defaults and closes app).
-
-### Changed
-- LSP go-to-definition client hardening:
-  - configurable initialize/request timeouts
-  - per-server retry attempts
-  - optional verbose LSP event logging
-  - server preference order respected from settings
-- Tuned default LSP settings based on smoke timings:
-  - initialize timeout: `2.5s`
-  - request timeout: `2.0s`
-  - retries: `2`
-
-### Fixed
-- Windows server command parsing now handles quoted executable paths with spaces for LSP server settings.
 
 ## [1.7.4-prerelease] - 2026-02-26
 
