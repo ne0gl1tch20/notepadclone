@@ -118,3 +118,17 @@
    - advanced lexer stateful styling/perf
    - fuller indicator metadata/query APIs
    - annotation/calltip theming and interaction polish
+
+
+PyPad UI defaults:
+
+- Style: soft rounded modern
+- Layout: Notepad++ style menus + dock panels
+- Minimap: right dock, toggle in View
+- Panels: QDockWidget-based
+- Icons: monochrome SVG themed (if dark mode, white icons, if light mode, black in icons)
+- Density: medium compact
+- Platform feel: Windows-first but cross-platform safe
+
+If ambiguous, choose the simplest consistent option.
+Ask at most one clarification question.
