@@ -2,6 +2,9 @@
 
 Pypad is a PySide6 desktop text editor focused on fast note-taking and power-user workflows.
 
+Creator's Thoughts
+- You might wonder why my naming is like the other repos, i think i named it on my own since its a great way despite all the mess...
+
 Highlights:
 - Soft modern rounded UI overhaul with token-based theming
 - Multi-tab editor with detachable tabs, pin/favorite states, and rich tab actions
@@ -43,3 +46,6 @@ Highlights:
 
 - `tests/visual_smoke_phase2_baseline.json` is the committed visual baseline used by CI.
 - `tests_tmp/visual_smoke_phase2/index.html` is generated during visual smoke runs for quick review.
+
+## Credits
+I use codex to turbo boost the codebase, however, i still use my coding skills for that.
